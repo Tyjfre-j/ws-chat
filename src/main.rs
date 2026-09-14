@@ -6,9 +6,13 @@ use axum::{
     extract::State,
 };
 
+use std::sync::Arc;
+use dashmap::DashMap;
+use tokio::sync::broadcast;
+
 #[derive(Clone)]
 struct AppState {
-    // Add any fields you need in the app state
+    rooms: Arc<DashMap<String, broadcast::Sender<ServerMessage>>>,
 }
 #[derive(serde::Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
@@ -75,7 +79,9 @@ async fn handle_socket(mut socket: WebSocket, _state: AppState) {
 #[tokio::main]
 async fn main() {
 
-    let state = AppState {};
+    let state = AppState {
+        rooms: Arc::new(DashMap::new()),
+    };
 
     let app = Router::new()
         .route("/health", get(handle_health))
