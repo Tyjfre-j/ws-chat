@@ -3,8 +3,13 @@ use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
     routing::get,
+    extract::State,
 };
 
+#[derive(Clone)]
+struct AppState {
+    // Add any fields you need in the app state
+}
 #[derive(serde::Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
 enum ClientMessage {
@@ -27,11 +32,11 @@ async fn send_server_message(socket: &mut WebSocket, msg: &ServerMessage) -> boo
     socket.send(Message::Text(text.into())).await.is_ok()
 }
 
-async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(handle_socket)
+async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-async fn handle_socket(mut socket: WebSocket) {
+async fn handle_socket(mut socket: WebSocket, _state: AppState) {
     while let Some(msg) = socket.recv().await {
         if let Ok(msg) = msg {
             match msg {
@@ -69,9 +74,13 @@ async fn handle_socket(mut socket: WebSocket) {
 
 #[tokio::main]
 async fn main() {
+
+    let state = AppState {};
+
     let app = Router::new()
         .route("/health", get(handle_health))
-        .route("/ws", get(ws_handler));
+        .route("/ws", get(ws_handler))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
