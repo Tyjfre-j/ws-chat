@@ -14,16 +14,20 @@ use tokio::sync::broadcast;
 struct AppState {
     rooms: Arc<DashMap<String, broadcast::Sender<ServerMessage>>>,
 }
+
 #[derive(serde::Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
 enum ClientMessage {
     ChatMessage { message: String },
+    JoinRoom { username: String, room: String },
 }
 
 #[derive(serde::Serialize, Debug, Clone)]
 #[serde(tag = "type", content = "data")]
 enum ServerMessage {
-    ChatMessage { message: String },
+    ChatMessage { username: String, message: String },
+    JoinedRoom { username: String },
+    LeftRoom { username: String },
     Error { message: String },
 }
 
@@ -35,16 +39,39 @@ async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState) {
-    let room_name = "general";
+async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    let Some(msg) = socket.recv().await else {
+        return;
+    };
+
+    let Ok(msg) = msg else {
+        return;
+    };
+
+    let Message::Text(text) = msg else {
+        return;
+    };
+
+    let Ok(parsed) = serde_json::from_str::<ClientMessage>(&text) else {
+        return;
+    };
+
+    let ClientMessage::JoinRoom { username, room } = parsed else {
+        return;
+    };
 
     let tx = state
         .rooms
-        .entry(room_name.to_string())
+        .entry(room.clone())
         .or_insert_with(|| broadcast::channel(16).0)
         .clone();
 
     let mut rx = tx.subscribe();
+
+    let joined = ServerMessage::JoinedRoom {
+        username: username.clone(),
+    };
+    let _ = tx.send(joined);
 
     let (mut sender, mut receiver) = socket.split();
 
@@ -66,7 +93,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                         match parsed {
                             ClientMessage::ChatMessage { message } => {
-                                let reply = ServerMessage::ChatMessage { message };
+                                let reply = ServerMessage::ChatMessage {
+                                    username: username.clone(),
+                                    message,
+                                };
+                                let _ = tx.send(reply);
+                            }
+                            ClientMessage::JoinRoom { .. } => {
+                                let reply = ServerMessage::Error {
+                                    message: "already joined".to_string(),
+                                };
                                 let _ = tx.send(reply);
                             }
                         }
@@ -85,6 +121,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             break;
         }
     }
+
+    let left = ServerMessage::LeftRoom {
+        username: username.clone(),
+    };
+    let _ = tx.send(left);
 
     send_task.abort();
 }
