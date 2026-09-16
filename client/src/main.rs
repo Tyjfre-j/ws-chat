@@ -8,6 +8,7 @@ use ratatui::{
 #[derive(Default)]
 struct App {
     input: String,
+    messages: Vec<String>,
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -25,6 +26,14 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
                 KeyCode::Esc => break Ok(()),
                 KeyCode::Char(c) => app.input.push(c),
                 KeyCode::Backspace => { app.input.pop(); }
+                KeyCode::Enter => {
+                    let msg = app.input.trim();
+                    if msg.is_empty() {
+                        continue;
+                    }
+                    app.messages.push(msg.to_string());
+                    app.input.clear();
+                }
                 _ => {}
             }
         }
@@ -44,7 +53,7 @@ fn render(frame: &mut Frame, app: &App) {
     );
 
     frame.render_widget(
-        Paragraph::new("Alice: hey\nBob: hi there")
+        Paragraph::new(app.messages.join("\n"))
             .block(Block::default().borders(Borders::ALL).title("Messages")),
         chunks[1],
     );
