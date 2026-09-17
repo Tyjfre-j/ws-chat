@@ -62,7 +62,7 @@ async fn receive_client_message(socket: &mut WebSocket) -> Received {
 async fn welcome_user(socket: &mut WebSocket) -> bool {
     let welcome_message = ServerMessage::Welcome;
     let welcome_text = serde_json::to_string(&welcome_message)
-        .expect("ServerMessage::Welcome has no fields, so serialization cannot fail");
+        .expect("ServerMessage::Welcome shouldnt fail to serialize");
 
     match socket.send(Message::Text(welcome_text.into())).await {
         Ok(()) => true,
@@ -103,12 +103,11 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
     let confirm_message = ServerMessage::ConfirmUsername {
         username: username.to_string(),
     };
-    let confirm_text = serde_json::to_string(&confirm_message).unwrap();
-    if socket
-        .send(Message::Text(confirm_text.into()))
-        .await
-        .is_err()
-    {
+    let confirm_text = serde_json::to_string(&confirm_message)
+        .expect("ServerMessage::ConfirmUsername shouldnt fail to serialize");
+
+    if let Err(e) = socket.send(Message::Text(confirm_text.into())).await {
+        eprintln!("failed to send confirm username message: {e}");
         return None;
     }
 
@@ -150,12 +149,10 @@ async fn select_room(socket: &mut WebSocket, state: AppState) -> Option<String> 
         .map(|entry| entry.key().clone())
         .collect();
     let room_list_message = ServerMessage::RoomList { rooms: room_list };
-    let room_list_text = serde_json::to_string(&room_list_message).unwrap();
-    if socket
-        .send(Message::Text(room_list_text.into()))
-        .await
-        .is_err()
-    {
+    let room_list_text = serde_json::to_string(&room_list_message)
+        .expect("ServerMessage::RoomList shouldnt fail to serialize");
+    if let Err(e) = socket.send(Message::Text(room_list_text.into())).await {
+        eprintln!("failed to send room list message: {e}");
         return None;
     }
 
