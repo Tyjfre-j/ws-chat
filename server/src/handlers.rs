@@ -21,8 +21,12 @@ async fn send_error(socket: &mut WebSocket, message: &str) {
     let error_reply = ServerMessage::Error {
         message: message.to_string(),
     };
-    let error_text = serde_json::to_string(&error_reply).unwrap();
-    let _ = socket.send(Message::Text(error_text.into())).await;
+    let error_text = serde_json::to_string(&error_reply)
+        .expect("ServerMessage::Error shouldnt fail to serialize");
+
+    if let Err(e) = socket.send(Message::Text(error_text.into())).await {
+        eprintln!("failed to send error message: {e}");
+    }
 }
 
 async fn receive_client_message(socket: &mut WebSocket) -> Received {
