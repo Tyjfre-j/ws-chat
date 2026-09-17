@@ -1,12 +1,12 @@
 use ratatui::{
+    DefaultTerminal, Frame,
     crossterm::event::{self, Event, KeyCode},
     layout::{Constraint, Direction, Layout},
     widgets::{Block, Borders, Paragraph},
-    DefaultTerminal, Frame,
 };
 
 use futures_util::StreamExt;
-use tokio_tungstenite::connect_async; 
+use tokio_tungstenite::connect_async;
 
 #[derive(Default)]
 struct App {
@@ -50,7 +50,9 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
             match key.code {
                 KeyCode::Esc => break Ok(()),
                 KeyCode::Char(c) => app.input.push(c),
-                KeyCode::Backspace => { app.input.pop(); }
+                KeyCode::Backspace => {
+                    app.input.pop();
+                }
                 KeyCode::Enter => {
                     let msg = app.input.trim();
                     if msg.is_empty() {
@@ -68,7 +70,11 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
 fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(3),
+        ])
         .split(frame.area());
 
     frame.render_widget(

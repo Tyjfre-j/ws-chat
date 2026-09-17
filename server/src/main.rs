@@ -2,7 +2,7 @@ mod handlers;
 mod protocol;
 mod state;
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use dashmap::DashMap;
 use std::sync::Arc;
 

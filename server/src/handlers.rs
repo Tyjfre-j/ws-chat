@@ -1,6 +1,6 @@
 use axum::{
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::State,
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -27,23 +27,42 @@ async fn send_error(socket: &mut WebSocket, message: &str) {
 
 async fn receive_client_message(socket: &mut WebSocket) -> Received {
     let Some(msg) = socket.recv().await else {
-        return Received::Disconnected; 
+        return Received::Disconnected;
     };
-    let Ok(msg) = msg else {
-        return Received::Disconnected; 
+    let msg = match msg {
+        Ok(msg) => msg,
+        Err(e) => {
+            eprintln!("error receiving message from client : {e}");
+            return Received::Disconnected;
+        }
     };
-    let Message::Text(text) = msg else {
-        return Received::Invalid; 
+
+    let text = match msg {
+        Message::Text(text) => text,
+        Message::Close(_) => {
+            return Received::Disconnected;
+        }
+        Message::Binary(_) => {
+            return Received::Invalid;
+        }
+        _ => {
+            return Received::Ignored;
+        }
     };
+
     match serde_json::from_str::<ClientMessage>(&text) {
         Ok(parsed) => Received::Message(parsed),
-        Err(_) => Received::Invalid,
+        Err(e) => {
+            eprintln!("error parsing client message: {e}");
+            Received::Invalid
+        }
     }
 }
 
 async fn welcome_user(socket: &mut WebSocket) -> bool {
     let welcome_message = ServerMessage::Welcome;
-    let welcome_text = serde_json::to_string(&welcome_message).expect("ServerMessage::Welcome has no fields, so serialization cannot fail");
+    let welcome_text = serde_json::to_string(&welcome_message)
+        .expect("ServerMessage::Welcome has no fields, so serialization cannot fail");
 
     match socket.send(Message::Text(welcome_text.into())).await {
         Ok(()) => true,
@@ -51,7 +70,7 @@ async fn welcome_user(socket: &mut WebSocket) -> bool {
             eprintln!("failed to send welcome message: {e}");
             false
         }
-}
+    }
 }
 
 async fn set_username(socket: &mut WebSocket) -> Option<String> {
@@ -69,6 +88,9 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
                 }
                 return Some(username);
             }
+            Received::Ignored => {
+                continue;
+            }
             Received::Message(_) => {
                 send_error(socket, "expected SetUsername message").await;
                 continue;
@@ -82,7 +104,11 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
         username: username.to_string(),
     };
     let confirm_text = serde_json::to_string(&confirm_message).unwrap();
-    if socket.send(Message::Text(confirm_text.into())).await.is_err() {
+    if socket
+        .send(Message::Text(confirm_text.into()))
+        .await
+        .is_err()
+    {
         return None;
     }
 
@@ -95,6 +121,9 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
             }
             Received::Message(ClientMessage::ConfirmUsername { confirmed }) => {
                 return Some(confirmed);
+            }
+            Received::Ignored => {
+                continue;
             }
             Received::Message(_) => {
                 send_error(socket, "expected ConfirmUsername message").await;
@@ -115,10 +144,18 @@ async fn get_confirmed_username(socket: &mut WebSocket) -> Option<String> {
 }
 
 async fn select_room(socket: &mut WebSocket, state: AppState) -> Option<String> {
-    let room_list: Vec<String> = state.rooms.iter().map(|entry| entry.key().clone()).collect();
+    let room_list: Vec<String> = state
+        .rooms
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
     let room_list_message = ServerMessage::RoomList { rooms: room_list };
     let room_list_text = serde_json::to_string(&room_list_message).unwrap();
-    if socket.send(Message::Text(room_list_text.into())).await.is_err() {
+    if socket
+        .send(Message::Text(room_list_text.into()))
+        .await
+        .is_err()
+    {
         return None;
     }
 
@@ -135,6 +172,9 @@ async fn select_room(socket: &mut WebSocket, state: AppState) -> Option<String> 
                     continue;
                 }
                 return Some(room);
+            }
+            Received::Ignored => {
+                continue;
             }
             Received::Message(_) => {
                 send_error(socket, "expected JoinRoom message").await;
@@ -186,7 +226,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             break;
         };
         let Message::Text(text) = msg else {
-            continue; 
+            continue;
         };
         match serde_json::from_str::<ClientMessage>(&text) {
             Ok(ClientMessage::ChatMessage { message }) => {

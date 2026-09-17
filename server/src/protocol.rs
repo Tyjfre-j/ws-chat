@@ -21,6 +21,7 @@ pub enum ClientMessage {
 
 pub enum Received {
     Message(ClientMessage),
+    Ignored,
     Invalid,
     Disconnected,
 }
