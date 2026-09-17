@@ -1,4 +1,6 @@
-#[derive(serde::Serialize, Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Debug, Clone)]
 #[serde(tag = "type", content = "data")]
 pub enum ServerMessage {
     Welcome,
@@ -10,7 +12,7 @@ pub enum ServerMessage {
     Error { message: String },
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum ClientMessage {
     SetUsername { username: String },
