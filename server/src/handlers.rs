@@ -43,8 +43,15 @@ async fn receive_client_message(socket: &mut WebSocket) -> Received {
 
 async fn welcome_user(socket: &mut WebSocket) -> bool {
     let welcome_message = ServerMessage::Welcome;
-    let welcome_text = serde_json::to_string(&welcome_message).unwrap();
-    socket.send(Message::Text(welcome_text.into())).await.is_ok()
+    let welcome_text = serde_json::to_string(&welcome_message).expect("ServerMessage::Welcome has no fields, so serialization cannot fail");
+
+    match socket.send(Message::Text(welcome_text.into())).await {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("failed to send welcome message: {e}");
+            false
+        }
+}
 }
 
 async fn set_username(socket: &mut WebSocket) -> Option<String> {
