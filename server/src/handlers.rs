@@ -4,7 +4,6 @@ use axum::{
     response::IntoResponse,
 };
 
-
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -38,7 +37,7 @@ async fn receive_client_message(socket: &mut WebSocket) -> Received {
     let msg = match msg {
         Ok(msg) => msg,
         Err(e) => {
-            eprintln!("error receiving message from client : {e}");
+            eprintln!("error receiving message from client: {e}");
             return Received::Disconnected;
         }
     };
@@ -88,11 +87,12 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
                 continue;
             }
             Received::Message(ClientMessage::SetUsername { username }) => {
-                if username.trim().is_empty() {
+                let username = username.trim();
+                if username.is_empty() {
                     send_error(socket, "username cannot be empty").await;
                     continue;
                 }
-                return Some(username);
+                return Some(username.to_string());
             }
             Received::Ignored => {
                 continue;
@@ -170,11 +170,12 @@ async fn select_room(socket: &mut WebSocket, state: AppState) -> Option<String> 
                 continue;
             }
             Received::Message(ClientMessage::JoinRoom { room }) => {
-                if room.trim().is_empty() {
+                let room = room.trim();
+                if room.is_empty() {
                     send_error(socket, "room name cannot be empty").await;
                     continue;
                 }
-                return Some(room);
+                return Some(room.to_string());
             }
             Received::Ignored => {
                 continue;
@@ -193,7 +194,13 @@ async fn forward_broadcast_message(
 ) -> bool {
     match result {
         Ok(msg) => {
-            let text = serde_json::to_string(&msg).unwrap();
+            let text = match serde_json::to_string(&msg) {
+                Ok(text) => text,
+                Err(e) => {
+                    eprintln!("failed to serialize server message: {e}");
+                    return false;
+                }
+            };
             socket.send(Message::Text(text.into())).await.is_ok()
         }
         Err(RecvError::Lagged(count)) => {
@@ -210,23 +217,43 @@ async fn handle_client_message(
     username: &str,
     result: Option<Result<Message, axum::Error>>,
 ) -> bool {
-    let Some(Ok(msg)) = result else {
+    let Some(result) = result else {
         return false;
     };
+
+    let msg = match result {
+        Ok(msg) => msg,
+        Err(e) => {
+            eprintln!("error receiving message from client: {e}");
+            return false;
+        }
+    };
+
     let Message::Text(text) = msg else {
+        send_error(socket, "only text messages are supported").await;
         return true;
     };
+
     match serde_json::from_str::<ClientMessage>(&text) {
         Ok(ClientMessage::ChatMessage { message }) => {
             let reply = ServerMessage::ChatMessage {
                 username: username.to_string(),
                 message,
             };
+
             let _ = tx.send(reply);
         }
-        Ok(_) => send_error(socket, "unexpected message at this stage").await,
-        Err(_) => send_error(socket, "invalid message format").await,
+
+        Ok(_) => {
+            send_error(socket, "unexpected message at this stage").await;
+        }
+
+        Err(e) => {
+            eprintln!("error parsing client message: {e}");
+            send_error(socket, "invalid message format").await;
+        }
     }
+
     true
 }
 
@@ -271,10 +298,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
     }
 
-     let left = ServerMessage::LeftRoom {
+    let left = ServerMessage::LeftRoom {
         username: username.clone(),
     };
     let _ = tx.send(left);
 }
-
-
