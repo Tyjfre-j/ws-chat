@@ -229,10 +229,15 @@ async fn handle_client_message(
         }
     };
 
-    let Message::Text(text) = msg else {
+    let text = match msg {
+    Message::Text(text) => text,
+    Message::Close(_) => return false, 
+    Message::Binary(_) => {
         send_error(socket, "only text messages are supported").await;
         return true;
-    };
+    }
+    _ => return true, 
+};
 
     match serde_json::from_str::<ClientMessage>(&text) {
         Ok(ClientMessage::ChatMessage { message }) => {
