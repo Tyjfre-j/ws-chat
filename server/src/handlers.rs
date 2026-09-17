@@ -5,6 +5,8 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
+use futures_util::stream::SplitSink;
 
 use crate::protocol::{ClientMessage, Received, ServerMessage};
 use crate::state::AppState;
@@ -185,6 +187,29 @@ async fn select_room(socket: &mut WebSocket, state: AppState) -> Option<String> 
     }
 }
 
+async fn forward_broadcast_to_client(mut sender: SplitSink<WebSocket, Message>, mut rx: tokio::sync::broadcast::Receiver<ServerMessage>) {
+
+        loop {
+            let msg = match rx.recv().await {
+                Ok(msg) => msg,
+                Err(RecvError::Lagged(count)) => {
+                    eprintln!("lagged behind by {count} messages");
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("broadcast recv error: {e}");
+                    break;
+                }
+        };
+
+            let text =
+                serde_json::to_string(&msg).expect("ServerMessage shouldnt fail to serialize");
+            if sender.send(Message::Text(text.into())).await.is_err() {
+                break;
+            }
+        }
+
+}
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     if !welcome_user(&mut socket).await {
         return;
@@ -204,23 +229,16 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         .or_insert_with(|| broadcast::channel(16).0)
         .clone();
 
-    let mut rx = tx.subscribe();
+    let rx = tx.subscribe();
 
     let joined = ServerMessage::JoinedRoom {
         username: username.clone(),
     };
     let _ = tx.send(joined);
 
-    let (mut sender, mut receiver) = socket.split();
+    let (sender, mut receiver) = socket.split();
 
-    let send_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            let text = serde_json::to_string(&msg).unwrap();
-            if sender.send(Message::Text(text.into())).await.is_err() {
-                break;
-            }
-        }
-    });
+    let send_task = tokio::spawn(forward_broadcast_to_client(sender, rx));
 
     while let Some(msg) = receiver.next().await {
         let Ok(msg) = msg else {
