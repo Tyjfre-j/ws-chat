@@ -7,16 +7,17 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use protocol::{ServerMessage};
 use futures_util::StreamExt;
-use tokio_tungstenite::connect_async;
+use protocol::{ClientStage, ServerMessage};
 use serde_json;
+use tokio_tungstenite::connect_async;
 
 #[derive(Default)]
 struct App {
     input: String,
     messages: Vec<String>,
     connected: bool,
+    stage: ClientStage,
 }
 
 enum AppEvent {
@@ -31,7 +32,7 @@ async fn connect_and_listen(tx: tokio::sync::mpsc::Sender<AppEvent>) {
 
     let (_write, mut read) = ws_stream.split();
 
-    while let Some(message) = read.next().await{
+    while let Some(message) = read.next().await {
         match message {
             Ok(message) => {
                 if let Ok(text) = message.to_text() {
@@ -75,6 +76,37 @@ fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
+fn handle_server_message(app: &mut App, msg: ServerMessage) {
+    match msg {
+        ServerMessage::Welcome => {
+            app.connected = true;
+            app.messages.push("Connected to server".to_string());
+            app.stage = ClientStage::SetUsername;
+        }
+        ServerMessage::ConfirmUsername { username } => {
+            app.messages
+                .push(format!("Confirm username '{}'? (y/n)", username));
+            app.stage = ClientStage::ConfirmUsername { proposed: username };
+        }
+        ServerMessage::RoomList { rooms } => {
+            app.messages.push(format!("Available rooms: {:?}", rooms));
+            app.stage = ClientStage::SelectRoom { rooms };
+        }
+        ServerMessage::ChatMessage { username, message } => {
+            app.messages.push(format!("[{}]: {}", username, message));
+        }
+        ServerMessage::JoinedRoom { username } => {
+            app.messages.push(format!("{} joined the room", username));
+        }
+        ServerMessage::LeftRoom { username } => {
+            app.messages.push(format!("{} left the room", username));
+        }
+        ServerMessage::Error { message } => {
+            app.messages.push(format!("Error from server: {}", message));
+        }
+    }
+}
+
 fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
@@ -85,51 +117,13 @@ fn run(
 
         while let Ok(event) = rx.try_recv() {
             match event {
-                AppEvent::Server(msg) =>  match msg {
-                    ServerMessage::Welcome => {
-                        app.connected = true;
-                        app.messages.push("Connected to server".to_string());
-                    }
-                    ServerMessage::ConfirmUsername { username } => {
-                        app.messages.push(format!("Username confirmed: {}", username));
-                    }
-                    ServerMessage::RoomList { rooms } => {
-                        app.messages.push(format!("Available rooms: {:?}", rooms));
-                    }
-                    ServerMessage::ChatMessage { username, message } => {
-                        app.messages.push(format!("[{}]: {}", username, message));
-                    }
-                    ServerMessage::JoinedRoom { username } => {
-                        app.messages.push(format!("{} joined the room", username));
-                    }
-                    ServerMessage::LeftRoom { username } => {
-                        app.messages.push(format!("{} left the room", username));
-                    }
-                    ServerMessage::Error { message } => {
-                        app.messages.push(format!("Error from server: {}", message));
-                    }
-                    
+                AppEvent::Server(msg) => {
+                    handle_server_message(app, msg);
                 }
                 AppEvent::Disconnected => {
-                    // we'll fill this in next
-                }
-            }
-        }
-
-        // check for a keypress, but don't block forever waiting for one
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Esc => return Ok(()),
-                    KeyCode::Char(c) => app.input.push(c),
-                    KeyCode::Backspace => { app.input.pop(); }
-                    KeyCode::Enter => {
-                        let msg = app.input.trim();
-                        if msg.is_empty() { continue; }
-                        app.messages.push(msg.to_string());
-                        app.input.clear();
-                    }
-                    _ => {}
+                    app.connected = false;
+                    app.messages.push("Disconnected from server".to_string());
+                    app.stage = ClientStage::Disconnected;
                 }
             }
         }

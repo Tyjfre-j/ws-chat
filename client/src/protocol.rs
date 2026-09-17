@@ -20,3 +20,20 @@ pub enum ServerMessage {
     LeftRoom { username: String },
     Error { message: String },
 }
+
+#[derive(Default)]
+pub enum ClientStage {
+    #[default]
+    Connecting,
+    SetUsername,
+    ConfirmUsername {
+        proposed: String,
+    },
+    SelectRoom {
+        rooms: Vec<String>,
+    },
+    Chatting {
+        room: String,
+    },
+    Disconnected,
+}
