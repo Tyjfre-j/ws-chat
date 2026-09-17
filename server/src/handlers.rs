@@ -3,10 +3,10 @@ use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
 };
-use futures_util::{SinkExt, StreamExt};
+
+
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
-use futures_util::stream::SplitSink;
 
 use crate::protocol::{ClientMessage, Received, ServerMessage};
 use crate::state::AppState;
@@ -187,29 +187,49 @@ async fn select_room(socket: &mut WebSocket, state: AppState) -> Option<String> 
     }
 }
 
-async fn forward_broadcast_to_client(mut sender: SplitSink<WebSocket, Message>, mut rx: tokio::sync::broadcast::Receiver<ServerMessage>) {
-
-        loop {
-            let msg = match rx.recv().await {
-                Ok(msg) => msg,
-                Err(RecvError::Lagged(count)) => {
-                    eprintln!("lagged behind by {count} messages");
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("broadcast recv error: {e}");
-                    break;
-                }
-        };
-
-            let text =
-                serde_json::to_string(&msg).expect("ServerMessage shouldnt fail to serialize");
-            if sender.send(Message::Text(text.into())).await.is_err() {
-                break;
-            }
+async fn forward_broadcast_message(
+    socket: &mut WebSocket,
+    result: Result<ServerMessage, RecvError>,
+) -> bool {
+    match result {
+        Ok(msg) => {
+            let text = serde_json::to_string(&msg).unwrap();
+            socket.send(Message::Text(text.into())).await.is_ok()
         }
-
+        Err(RecvError::Lagged(count)) => {
+            eprintln!("lagged behind by {count} messages");
+            true
+        }
+        Err(RecvError::Closed) => false,
+    }
 }
+
+async fn handle_client_message(
+    socket: &mut WebSocket,
+    tx: &broadcast::Sender<ServerMessage>,
+    username: &str,
+    result: Option<Result<Message, axum::Error>>,
+) -> bool {
+    let Some(Ok(msg)) = result else {
+        return false;
+    };
+    let Message::Text(text) = msg else {
+        return true;
+    };
+    match serde_json::from_str::<ClientMessage>(&text) {
+        Ok(ClientMessage::ChatMessage { message }) => {
+            let reply = ServerMessage::ChatMessage {
+                username: username.to_string(),
+                message,
+            };
+            let _ = tx.send(reply);
+        }
+        Ok(_) => send_error(socket, "unexpected message at this stage").await,
+        Err(_) => send_error(socket, "invalid message format").await,
+    }
+    true
+}
+
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     if !welcome_user(&mut socket).await {
         return;
@@ -226,52 +246,35 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let tx = state
         .rooms
         .entry(room.clone())
-        .or_insert_with(|| broadcast::channel(16).0)
+        .or_insert_with(|| broadcast::channel(256).0)
         .clone();
 
-    let rx = tx.subscribe();
+    let mut rx = tx.subscribe();
 
     let joined = ServerMessage::JoinedRoom {
         username: username.clone(),
     };
     let _ = tx.send(joined);
 
-    let (sender, mut receiver) = socket.split();
-
-    let send_task = tokio::spawn(forward_broadcast_to_client(sender, rx));
-
-    while let Some(msg) = receiver.next().await {
-        let Ok(msg) = msg else {
-            break;
-        };
-        let Message::Text(text) = msg else {
-            continue;
-        };
-        match serde_json::from_str::<ClientMessage>(&text) {
-            Ok(ClientMessage::ChatMessage { message }) => {
-                let reply = ServerMessage::ChatMessage {
-                    username: username.clone(),
-                    message,
-                };
-                let _ = tx.send(reply);
+    loop {
+        tokio::select! {
+            broadcast_result = rx.recv() => {
+                if !forward_broadcast_message(&mut socket, broadcast_result).await {
+                    break;
+                }
             }
-            Ok(_) => {
-                let _ = tx.send(ServerMessage::Error {
-                    message: "unexpected message at this stage".to_string(),
-                });
-            }
-            Err(_) => {
-                let _ = tx.send(ServerMessage::Error {
-                    message: "invalid message format".to_string(),
-                });
+            client_result = socket.recv() => {
+                if !handle_client_message(&mut socket, &tx, &username, client_result).await {
+                    break;
+                }
             }
         }
     }
 
-    let left = ServerMessage::LeftRoom {
+     let left = ServerMessage::LeftRoom {
         username: username.clone(),
     };
     let _ = tx.send(left);
-
-    send_task.abort();
 }
+
+
