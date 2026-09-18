@@ -37,3 +37,9 @@ pub enum ClientStage {
     },
     Disconnected,
 }
+
+pub enum ConnectionOutcome {
+    Quit,
+    FailedToConnect,
+    Disconnected,
+}
