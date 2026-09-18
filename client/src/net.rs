@@ -15,7 +15,6 @@ where
     write.send(Message::Text(json.into())).await
 }
 
-/// Returns false when the connection is dead and the loop should exit.
 pub fn handle_incoming(
     app: &mut App,
     server_msg: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
