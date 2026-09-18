@@ -56,13 +56,13 @@ where
                 if let Err(e) = net::send_msg(write, &msg).await {
                     eprintln!("failed to send username rejection: {e}");
                 }
-                app.messages
-                    .push("Username not confirmed. Please enter a new username.".to_string());
+                app.push_message(
+                    "Username not confirmed. Please enter a new username.".to_string(),
+                );
                 app.stage = ClientStage::SetUsername;
             }
             _ => {
-                app.messages
-                    .push("Invalid input. Please enter 'y' or 'n'.".to_string());
+                app.push_message("Invalid input. Please enter 'y' or 'n'.".to_string());
             }
         },
         ClientStage::SelectRoom { rooms } => {
@@ -76,7 +76,7 @@ where
                     app.stage = ClientStage::Chatting { room: input };
                 }
             } else {
-                app.messages.push(format!(
+                app.push_message(format!(
                     "Room '{input}' does not exist. Please select a valid room."
                 ));
             }
