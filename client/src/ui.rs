@@ -4,6 +4,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+use ratatui::style::{Color, Style};
+
 use crate::app::App;
 use crate::protocol::ClientStage;
 pub fn render(frame: &mut Frame, app: &App) {
@@ -27,13 +29,29 @@ pub fn render(frame: &mut Frame, app: &App) {
         ClientStage::Disconnected => "Disconnected".to_string(),
     };
 
+    let border_color = match &app.stage {
+        ClientStage::Connecting => Color::Yellow,
+        ClientStage::Disconnected => Color::Red,
+        ClientStage::Chatting { .. } => Color::Green,
+        _ => Color::White,
+    };
+
     frame.render_widget(
-        Paragraph::new(status).block(Block::default().borders(Borders::ALL).title("ws-chat")),
+        Paragraph::new(status).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("ws-chat")
+                .border_style(Style::default().fg(border_color)),
+        ),
         chunks[0],
     );
 
+    let visible_height = chunks[1].height.saturating_sub(2) as usize;
+    let start = app.messages.len().saturating_sub(visible_height);
+    let visible_messages = app.messages[start..].join("\n");
+
     frame.render_widget(
-        Paragraph::new(app.messages.join("\n"))
+        Paragraph::new(visible_messages)
             .block(Block::default().borders(Borders::ALL).title("Messages")),
         chunks[1],
     );
