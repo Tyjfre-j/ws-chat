@@ -91,16 +91,15 @@ async fn wait_before_retry(
     events_stream: &mut EventStream,
     backoff: std::time::Duration,
 ) -> std::io::Result<bool> {
-    // returns Ok(true) if the user pressed Esc (caller should quit)
     terminal.draw(|frame| crate::ui::render(frame, app))?;
 
     tokio::select! {
         _ = tokio::time::sleep(backoff) => {}
         key_event = events_stream.next() => {
-            if let Some(Ok(crossterm::event::Event::Key(key))) = key_event {
-                if key.code == crossterm::event::KeyCode::Esc {
-                    return Ok(true);
-                }
+            if let Some(Ok(crossterm::event::Event::Key(key))) = key_event
+                && key.code == crossterm::event::KeyCode::Esc
+            {
+                return Ok(true);
             }
         }
     }
