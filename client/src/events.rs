@@ -65,20 +65,18 @@ where
                 app.push_message("Invalid input. Please enter 'y' or 'n'.".to_string());
             }
         },
-        ClientStage::SelectRoom { rooms } => {
-            if rooms.contains(&input) {
-                let msg = ClientMessage::JoinRoom {
-                    room: input.clone(),
-                };
-                if let Err(e) = net::send_msg(write, &msg).await {
-                    eprintln!("failed to send join room request: {e}");
-                } else {
-                    app.stage = ClientStage::Chatting { room: input };
-                }
+        ClientStage::SelectRoom => {
+            let room = input.trim().to_string();
+            if room.is_empty() {
+                app.push_message("Room name cannot be empty.".to_string());
+                return;
+            }
+
+            let msg = ClientMessage::JoinRoom { room: room.clone() };
+            if let Err(e) = net::send_msg(write, &msg).await {
+                eprintln!("failed to send join room request: {e}");
             } else {
-                app.push_message(format!(
-                    "Room '{input}' does not exist. Please select a valid room."
-                ));
+                app.stage = ClientStage::Chatting { room };
             }
         }
         ClientStage::Chatting { .. } => {

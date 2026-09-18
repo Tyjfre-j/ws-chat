@@ -37,7 +37,7 @@ The client uses one asynchronous event loop to race the WebSocket read stream ag
 
 Each room uses a `tokio::sync::broadcast` channel with a capacity of 256. Joining a room subscribes a client to that channel, and chat messages are broadcast to all subscribers. If a client falls behind, `broadcast::error::RecvError::Lagged` is logged and the client continues from the newest available message. A closed channel or socket error ends the session.
 
-Rooms are created lazily when a client joins a non-empty room name and removed after their last receiver is dropped. The client UI only permits selecting rooms from the room list received during the handshake.
+Rooms are created lazily when a client joins a non-empty room name and removed after their last receiver is dropped. The room list is a snapshot of existing rooms, but clients may also enter a new non-empty room name to create it.
 
 ### Client (`client/`)
 

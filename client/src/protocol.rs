@@ -29,9 +29,7 @@ pub enum ClientStage {
     ConfirmUsername {
         confirmed_username: String,
     },
-    SelectRoom {
-        rooms: Vec<String>,
-    },
+    SelectRoom,
     Chatting {
         room: String,
     },

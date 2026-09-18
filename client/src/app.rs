@@ -23,7 +23,9 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
     match msg {
         ServerMessage::Welcome => {
             app.connected = true;
-            app.push_message("Connected to the server please provide the username u wanna go with:".to_string());
+            app.push_message(
+                "Connected to the server please provide the username u wanna go with:".to_string(),
+            );
             app.stage = ClientStage::SetUsername;
         }
         ServerMessage::ConfirmUsername { username } => {
@@ -34,7 +36,7 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
         }
         ServerMessage::RoomList { rooms } => {
             app.push_message(format!("Available rooms: {:?}", rooms));
-            app.stage = ClientStage::SelectRoom { rooms };
+            app.stage = ClientStage::SelectRoom;
         }
         ServerMessage::ChatMessage { username, message } => {
             app.push_message(format!("[{}]: {}", username, message));
