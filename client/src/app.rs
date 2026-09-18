@@ -23,7 +23,7 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
     match msg {
         ServerMessage::Welcome => {
             app.connected = true;
-            app.push_message("Connected to the server".to_string());
+            app.push_message("Connected to the server please provide the username u wanna go with:".to_string());
             app.stage = ClientStage::SetUsername;
         }
         ServerMessage::ConfirmUsername { username } => {
