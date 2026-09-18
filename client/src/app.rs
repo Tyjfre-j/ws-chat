@@ -8,35 +8,45 @@ pub struct App {
     pub stage: ClientStage,
 }
 
+impl App {
+    const MAX_MESSAGES: usize = 200;
+
+    pub fn push_message(&mut self, message: String) {
+        self.messages.push(message);
+        if self.messages.len() > Self::MAX_MESSAGES {
+            self.messages.remove(0);
+        }
+    }
+}
+
 pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
     match msg {
         ServerMessage::Welcome => {
             app.connected = true;
-            app.messages.push("Connected to the server".to_string());
+            app.push_message("Connected to the server".to_string());
             app.stage = ClientStage::SetUsername;
         }
         ServerMessage::ConfirmUsername { username } => {
-            app.messages
-                .push(format!("Confirm username '{}'? (y/n)", username));
+            app.push_message(format!("Confirm username '{}'? (y/n)", username));
             app.stage = ClientStage::ConfirmUsername {
                 confirmed_username: username,
             };
         }
         ServerMessage::RoomList { rooms } => {
-            app.messages.push(format!("Available rooms: {:?}", rooms));
+            app.push_message(format!("Available rooms: {:?}", rooms));
             app.stage = ClientStage::SelectRoom { rooms };
         }
         ServerMessage::ChatMessage { username, message } => {
-            app.messages.push(format!("[{}]: {}", username, message));
+            app.push_message(format!("[{}]: {}", username, message));
         }
         ServerMessage::JoinedRoom { username } => {
-            app.messages.push(format!("{} joined the room", username));
+            app.push_message(format!("{} joined the room", username));
         }
         ServerMessage::LeftRoom { username } => {
-            app.messages.push(format!("{} left the room", username));
+            app.push_message(format!("{} left the room", username));
         }
         ServerMessage::Error { message } => {
-            app.messages.push(format!("Error from server: {}", message));
+            app.push_message(format!("Error from server: {}", message));
         }
     }
 }
