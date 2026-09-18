@@ -1,5 +1,5 @@
 use crossterm::event::EventStream;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use ratatui::DefaultTerminal;
 use tokio_tungstenite::connect_async;
 
@@ -39,6 +39,7 @@ pub async fn run_connection(
                 match key_event {
                     Some(Ok(crossterm::event::Event::Key(key))) => {
                         if let KeyOutcome::Quit = events::handle_key(app, &mut write, key).await {
+                            let _ = write.close().await;
                             return Ok(ConnectionOutcome::Quit);
                         }
                     }
