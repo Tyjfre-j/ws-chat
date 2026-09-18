@@ -11,6 +11,7 @@ use crate::protocol::{ClientMessage, Received, ServerMessage};
 use crate::state::AppState;
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+const MAX_CHAT_MESSAGE_LEN: usize = 4 * 1024;
 
 pub async fn handle_health() -> &'static str {
     "OK"
@@ -37,7 +38,7 @@ async fn send_error(socket: &mut WebSocket, message: &str) -> bool {
         message: message.to_string(),
     };
     send_server_message(socket, &error_reply).await
-} 
+}
 
 async fn receive_client_message(socket: &mut WebSocket) -> Received {
     let Some(msg) = socket.recv().await else {
@@ -65,15 +66,14 @@ async fn receive_client_message(socket: &mut WebSocket) -> Received {
     };
 
     match serde_json::from_str::<ClientMessage>(&text) {
-    Ok(parsed) => Received::Message(parsed),
-    Err(e) => {
-        eprintln!("failed to parse client message during setup");
-        eprintln!("  received: {text:?}");
-        eprintln!("  error: {e}");
-        Received::Invalid
+        Ok(parsed) => Received::Message(parsed),
+        Err(e) => {
+            eprintln!("failed to parse client message during setup");
+            eprintln!("  received: {text:?}");
+            eprintln!("  error: {e}");
+            Received::Invalid
+        }
     }
-    }
-    
 }
 
 async fn set_username(socket: &mut WebSocket) -> Option<String> {
@@ -217,12 +217,12 @@ async fn handle_client_message(
     };
 
     let msg = match result {
-    Ok(msg) => msg,
-    Err(e) => {
-        eprintln!("error receiving message from client: {e}");
-        return false;
-    }
-};
+        Ok(msg) => msg,
+        Err(e) => {
+            eprintln!("error receiving message from client: {e}");
+            return false;
+        }
+    };
 
     let text = match msg {
         Message::Text(text) => text,
@@ -233,6 +233,11 @@ async fn handle_client_message(
         }
         _ => return true,
     };
+
+    if text.len() > MAX_CHAT_MESSAGE_LEN {
+        send_error(socket, "message too large").await;
+        return true;
+    }
 
     match serde_json::from_str::<ClientMessage>(&text) {
         Ok(ClientMessage::ChatMessage { message }) => {
@@ -259,12 +264,7 @@ async fn handle_client_message(
     true
 }
 
-async fn run_chat_loop(
-    socket: &mut WebSocket,
-    state: &AppState,
-    username: String,
-    room: String,
-) {
+async fn run_chat_loop(socket: &mut WebSocket, state: &AppState, username: String, room: String) {
     let (tx, mut rx) = {
         let entry = state
             .rooms
