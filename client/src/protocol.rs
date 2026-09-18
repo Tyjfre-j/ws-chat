@@ -27,7 +27,7 @@ pub enum ClientStage {
     Connecting,
     SetUsername,
     ConfirmUsername {
-        proposed: String,
+        confirmed_username: String,
     },
     SelectRoom {
         rooms: Vec<String>,

@@ -17,12 +17,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         .split(frame.area());
 
     let status = match &app.stage {
-        ClientStage::Connecting => "Connecting",
-        ClientStage::SetUsername => "Entering Username",
-        ClientStage::ConfirmUsername { .. } => "Confirming Username",
-        ClientStage::SelectRoom { .. } => "Selecting Room",
-        ClientStage::Chatting { .. } => "Chatting",
-        ClientStage::Disconnected => "Disconnected",
+        ClientStage::Connecting => "Connecting".to_string(),
+        ClientStage::SetUsername => "Entering Username".to_string(),
+        ClientStage::ConfirmUsername { confirmed_username } => {
+            format!("Confirming Username: {}", confirmed_username)
+        }
+        ClientStage::SelectRoom { .. } => "Selecting Room".to_string(),
+        ClientStage::Chatting { room } => format!("Chatting in {}", room),
+        ClientStage::Disconnected => "Disconnected".to_string(),
     };
 
     frame.render_widget(

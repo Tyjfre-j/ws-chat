@@ -18,7 +18,9 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
         ServerMessage::ConfirmUsername { username } => {
             app.messages
                 .push(format!("Confirm username '{}'? (y/n)", username));
-            app.stage = ClientStage::ConfirmUsername { proposed: username };
+            app.stage = ClientStage::ConfirmUsername {
+                confirmed_username: username,
+            };
         }
         ServerMessage::RoomList { rooms } => {
             app.messages.push(format!("Available rooms: {:?}", rooms));
