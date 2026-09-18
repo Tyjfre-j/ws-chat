@@ -265,14 +265,12 @@ async fn run_chat_loop(
     username: String,
     room: String,
 ) {
-    // Subscribe while holding the shard lock, so a concurrent room-removal
-    // can't slip in between "room exists" and "we subscribed to it".
     let (tx, mut rx) = {
         let entry = state
             .rooms
             .entry(room.clone())
             .or_insert_with(|| broadcast::channel(256).0);
-        let tx = entry.get().clone();
+        let tx = entry.value().clone();
         let rx = tx.subscribe();
         (tx, rx)
     };
@@ -300,7 +298,6 @@ async fn run_chat_loop(
         username: username.clone(),
     });
 
-    // Only now is this client truly gone from the room.
     drop(rx);
     state
         .rooms
