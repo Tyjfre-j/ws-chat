@@ -1,8 +1,9 @@
 mod protocol;
 
+use crossterm::event::EventStream;
+
 use ratatui::{
     DefaultTerminal, Frame,
-    crossterm::event::{self, Event, KeyCode},
     layout::{Constraint, Direction, Layout},
     widgets::{Block, Borders, Paragraph},
 };
@@ -20,60 +21,17 @@ struct App {
     stage: ClientStage,
 }
 
-enum AppEvent {
-    Server(ServerMessage),
-    Disconnected,
-}
-
-async fn connect_and_listen(tx: tokio::sync::mpsc::Sender<AppEvent>) {
-    let (ws_stream, _response) = connect_async("ws://127.0.0.1:3000/ws")
-        .await
-        .expect("failed to connect");
-
-    let (_write, mut read) = ws_stream.split();
-
-    while let Some(message) = read.next().await {
-        match message {
-            Ok(message) => {
-                if let Ok(text) = message.to_text() {
-                    match serde_json::from_str::<ServerMessage>(text) {
-                        Ok(server_message) => {
-                            if let Err(e) = tx.send(AppEvent::Server(server_message)).await {
-                                eprintln!("failed to send server message to main thread: {e}");
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("failed to parse server message: {e}");
-                        }
-                    }
-                } else {
-                    eprintln!("received non-text message from server");
-                }
-            }
-            Err(e) => {
-                eprintln!("error: {:?}", e);
-                break;
-            }
-        }
-    }
-
-    eprintln!("connection closed");
-    let _ = tx.send(AppEvent::Disconnected).await;
-}
-
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<AppEvent>(32);
-
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.spawn(connect_and_listen(tx));
 
     let mut app = App::default();
-    ratatui::run(|terminal| run(terminal, &mut app, &mut rx))?;
+    let mut terminal = ratatui::init();
+    let result = runtime.block_on(run(&mut terminal, &mut app));
+    ratatui::restore();
 
-    Ok(())
+    result.map_err(Into::into)
 }
 
 fn handle_server_message(app: &mut App, msg: ServerMessage) {
@@ -107,27 +65,67 @@ fn handle_server_message(app: &mut App, msg: ServerMessage) {
     }
 }
 
-fn run(
-    terminal: &mut DefaultTerminal,
-    app: &mut App,
-    rx: &mut tokio::sync::mpsc::Receiver<AppEvent>,
-) -> std::io::Result<()> {
+async fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
+    let (ws_stream, _response) = connect_async("ws://127.0.0.1:3000/ws")
+        .await
+        .expect("failed to connect");
+
+    let (write, mut read) = ws_stream.split();
+    let mut events = EventStream::new();
+
     loop {
         terminal.draw(|frame| render(frame, app))?;
 
-        while let Ok(event) = rx.try_recv() {
-            match event {
-                AppEvent::Server(msg) => {
-                    handle_server_message(app, msg);
+        tokio::select! {
+            server_msg = read.next() => {
+               match server_msg {
+                    Some(Ok(message)) => {
+                        if let Ok(text) = message.to_text() {
+                            match serde_json::from_str::<ServerMessage>(text) {
+                                Ok(server_message) => handle_server_message(app, server_message),
+                                Err(e) => eprintln!("failed to parse server message: {e}"),
+                            }
+                        } else {
+                            eprintln!("received non-text message from server");
+                        }
+                    }
+                    Some(Err(e)) => {
+                        eprintln!("error: {:?}", e);
+                        break;
+                    }
+                    None => {
+                        eprintln!("connection closed");
+                        break;
+                    }
                 }
-                AppEvent::Disconnected => {
-                    app.connected = false;
-                    app.messages.push("Disconnected from server".to_string());
-                    app.stage = ClientStage::Disconnected;
+            }
+            key_event = events.next() => {
+                match key_event {
+                    Some(Ok(crossterm::event::Event::Key(key))) => {
+                        match key.code {
+                            crossterm::event::KeyCode::Char(c) => {
+                                app.input.push(c);
+                            }
+                            crossterm::event::KeyCode::Backspace => {
+                                app.input.pop();
+                            }
+                            crossterm::event::KeyCode::Enter => {
+                                app.messages.push(format!("You: {}", app.input));
+                                app.input.clear();
+                            }
+                            crossterm::event::KeyCode::Esc => return Ok(()),
+                            _ => {}
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => eprintln!("error reading key event: {:?}", e),
+                    None => break,
                 }
             }
         }
     }
+
+    Ok(())
 }
 
 fn render(frame: &mut Frame, app: &App) {
