@@ -10,25 +10,34 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::protocol::{ClientMessage, Received, ServerMessage};
 use crate::state::AppState;
 
+const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+
 pub async fn handle_health() -> &'static str {
     "OK"
 }
 
 pub async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.max_message_size(MAX_MESSAGE_SIZE)
+        .on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-async fn send_error(socket: &mut WebSocket, message: &str) {
+async fn send_server_message(socket: &mut WebSocket, msg: &ServerMessage) -> bool {
+    let text = serde_json::to_string(msg).expect("ServerMessage shouldnt fail to serialize");
+    match socket.send(Message::Text(text.into())).await {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("failed to send message ({msg:?}): {e}");
+            false
+        }
+    }
+}
+
+async fn send_error(socket: &mut WebSocket, message: &str) -> bool {
     let error_reply = ServerMessage::Error {
         message: message.to_string(),
     };
-    let error_text = serde_json::to_string(&error_reply)
-        .expect("ServerMessage::Error shouldnt fail to serialize");
-
-    if let Err(e) = socket.send(Message::Text(error_text.into())).await {
-        eprintln!("failed to send error message: {e}");
-    }
-}
+    send_server_message(socket, &error_reply).await
+} 
 
 async fn receive_client_message(socket: &mut WebSocket) -> Received {
     let Some(msg) = socket.recv().await else {
@@ -56,26 +65,15 @@ async fn receive_client_message(socket: &mut WebSocket) -> Received {
     };
 
     match serde_json::from_str::<ClientMessage>(&text) {
-        Ok(parsed) => Received::Message(parsed),
-        Err(e) => {
-            eprintln!("error parsing client message: {e}");
-            Received::Invalid
-        }
+    Ok(parsed) => Received::Message(parsed),
+    Err(e) => {
+        eprintln!("failed to parse client message during setup");
+        eprintln!("  received: {text:?}");
+        eprintln!("  error: {e}");
+        Received::Invalid
     }
-}
-
-async fn welcome_user(socket: &mut WebSocket) -> bool {
-    let welcome_message = ServerMessage::Welcome;
-    let welcome_text = serde_json::to_string(&welcome_message)
-        .expect("ServerMessage::Welcome shouldnt fail to serialize");
-
-    match socket.send(Message::Text(welcome_text.into())).await {
-        Ok(()) => true,
-        Err(e) => {
-            eprintln!("failed to send welcome message: {e}");
-            false
-        }
     }
+    
 }
 
 async fn set_username(socket: &mut WebSocket) -> Option<String> {
@@ -106,14 +104,14 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
 }
 
 async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool> {
-    let confirm_message = ServerMessage::ConfirmUsername {
-        username: username.to_string(),
-    };
-    let confirm_text = serde_json::to_string(&confirm_message)
-        .expect("ServerMessage::ConfirmUsername shouldnt fail to serialize");
-
-    if let Err(e) = socket.send(Message::Text(confirm_text.into())).await {
-        eprintln!("failed to send confirm username message: {e}");
+    if !send_server_message(
+        socket,
+        &ServerMessage::ConfirmUsername {
+            username: username.to_string(),
+        },
+    )
+    .await
+    {
         return None;
     }
 
@@ -138,27 +136,33 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
     }
 }
 
-async fn get_confirmed_username(socket: &mut WebSocket) -> Option<String> {
+async fn get_confirmed_username(socket: &mut WebSocket, state: &AppState) -> Option<String> {
     loop {
         let username = set_username(socket).await?;
         match confirm_username(socket, &username).await? {
-            true => return Some(username),
+            true => match state.usernames.entry(username.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(_) => {
+                    send_error(socket, "username is already taken").await;
+                    continue;
+                }
+                dashmap::mapref::entry::Entry::Vacant(entry) => {
+                    entry.insert(());
+                    return Some(username);
+                }
+            },
             false => continue,
         }
     }
 }
 
-async fn select_room(socket: &mut WebSocket, state: AppState) -> Option<String> {
+async fn select_room(socket: &mut WebSocket, state: &AppState) -> Option<String> {
     let room_list: Vec<String> = state
         .rooms
         .iter()
         .map(|entry| entry.key().clone())
         .collect();
-    let room_list_message = ServerMessage::RoomList { rooms: room_list };
-    let room_list_text = serde_json::to_string(&room_list_message)
-        .expect("ServerMessage::RoomList shouldnt fail to serialize");
-    if let Err(e) = socket.send(Message::Text(room_list_text.into())).await {
-        eprintln!("failed to send room list message: {e}");
+
+    if !send_server_message(socket, &ServerMessage::RoomList { rooms: room_list }).await {
         return None;
     }
 
@@ -193,16 +197,7 @@ async fn forward_broadcast_message(
     result: Result<ServerMessage, RecvError>,
 ) -> bool {
     match result {
-        Ok(msg) => {
-            let text = match serde_json::to_string(&msg) {
-                Ok(text) => text,
-                Err(e) => {
-                    eprintln!("failed to serialize server message: {e}");
-                    return false;
-                }
-            };
-            socket.send(Message::Text(text.into())).await.is_ok()
-        }
+        Ok(msg) => send_server_message(socket, &msg).await,
         Err(RecvError::Lagged(count)) => {
             eprintln!("lagged behind by {count} messages");
             true
@@ -222,12 +217,12 @@ async fn handle_client_message(
     };
 
     let msg = match result {
-        Ok(msg) => msg,
-        Err(e) => {
-            eprintln!("error receiving message from client: {e}");
-            return false;
-        }
-    };
+    Ok(msg) => msg,
+    Err(e) => {
+        eprintln!("error receiving message from client: {e}");
+        return false;
+    }
+};
 
     let text = match msg {
         Message::Text(text) => text,
@@ -254,7 +249,9 @@ async fn handle_client_message(
         }
 
         Err(e) => {
-            eprintln!("error parsing client message: {e}");
+            eprintln!("failed to parse client message during chat");
+            eprintln!("  received: {text:?}");
+            eprintln!("  error: {e}");
             send_error(socket, "invalid message format").await;
         }
     }
@@ -262,49 +259,71 @@ async fn handle_client_message(
     true
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
-    if !welcome_user(&mut socket).await {
-        return;
-    }
-
-    let Some(username) = get_confirmed_username(&mut socket).await else {
-        return;
+async fn run_chat_loop(
+    socket: &mut WebSocket,
+    state: &AppState,
+    username: String,
+    room: String,
+) {
+    // Subscribe while holding the shard lock, so a concurrent room-removal
+    // can't slip in between "room exists" and "we subscribed to it".
+    let (tx, mut rx) = {
+        let entry = state
+            .rooms
+            .entry(room.clone())
+            .or_insert_with(|| broadcast::channel(256).0);
+        let tx = entry.get().clone();
+        let rx = tx.subscribe();
+        (tx, rx)
     };
 
-    let Some(room) = select_room(&mut socket, state.clone()).await else {
-        return;
-    };
-
-    let tx = state
-        .rooms
-        .entry(room.clone())
-        .or_insert_with(|| broadcast::channel(256).0)
-        .clone();
-
-    let mut rx = tx.subscribe();
-
-    let joined = ServerMessage::JoinedRoom {
+    let _ = tx.send(ServerMessage::JoinedRoom {
         username: username.clone(),
-    };
-    let _ = tx.send(joined);
+    });
 
     loop {
         tokio::select! {
             broadcast_result = rx.recv() => {
-                if !forward_broadcast_message(&mut socket, broadcast_result).await {
+                if !forward_broadcast_message(socket, broadcast_result).await {
                     break;
                 }
             }
             client_result = socket.recv() => {
-                if !handle_client_message(&mut socket, &tx, &username, client_result).await {
+                if !handle_client_message(socket, &tx, &username, client_result).await {
                     break;
                 }
             }
         }
     }
 
-    let left = ServerMessage::LeftRoom {
+    let _ = tx.send(ServerMessage::LeftRoom {
         username: username.clone(),
+    });
+
+    // Only now is this client truly gone from the room.
+    drop(rx);
+    state
+        .rooms
+        .remove_if(&room, |_, tx: &broadcast::Sender<ServerMessage>| {
+            tx.receiver_count() == 0
+        });
+}
+
+async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    if !send_server_message(&mut socket, &ServerMessage::Welcome).await {
+        return;
+    }
+
+    let Some(username) = get_confirmed_username(&mut socket, &state).await else {
+        return;
     };
-    let _ = tx.send(left);
+
+    let Some(room) = select_room(&mut socket, &state).await else {
+        state.usernames.remove(&username);
+        return;
+    };
+
+    run_chat_loop(&mut socket, &state, username.clone(), room).await;
+
+    state.usernames.remove(&username);
 }

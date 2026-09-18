@@ -13,6 +13,7 @@ use state::AppState;
 async fn main() {
     let state = AppState {
         rooms: Arc::new(DashMap::new()),
+        usernames: Arc::new(DashMap::new()),
     };
 
     let app = Router::new()
