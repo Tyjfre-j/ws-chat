@@ -1,4 +1,4 @@
-use crate::protocol::{ClientStage, ServerMessage};
+use crate::protocol::{ClientStage, ErrorCode, ServerMessage};
 
 #[derive(Default)]
 pub struct App {
@@ -47,7 +47,10 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
         ServerMessage::LeftRoom { username } => {
             app.push_message(format!("{} left the room", username));
         }
-        ServerMessage::Error { message } => {
+        ServerMessage::Error { code, message } => {
+            if code == ErrorCode::UsernameTaken {
+                app.stage = ClientStage::SetUsername;
+            }
             app.push_message(format!("Error from server: {}", message));
         }
     }

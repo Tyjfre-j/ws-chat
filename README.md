@@ -79,10 +79,14 @@ Messages are JSON text frames tagged with `type` and an optional `data` payload:
 | `chat_message`              | `{ "username": "...", "message": "..." }` | Broadcast to everyone in the room, including the sender |
 | `joined_room` / `left_room` | `{ "username": "..." }`                   | Presence notifications                                  |
 | `error`                     | `{ "message": "..." }`                    | Validation or protocol errors                           |
+| `error`                     | `{ "code": "...", "message": "..." }`     | Validation or protocol errors                           |
+
+- **Structured protocol errors:** Error responses include a stable machine-readable `code` and a human-readable `message`. The client uses the code for state transitions and the message for display.
 
 ## Running it
 
-Requires stable Rust and Cargo.
+- Handshake connections currently have no idle timeout. A liveness policy for chat connections and handshakes will be added separately after the desired ping/pong behavior is defined.
+  Requires stable Rust and Cargo.
 
 From the repository root, start the server:
 

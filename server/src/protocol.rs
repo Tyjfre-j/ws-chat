@@ -9,7 +9,21 @@ pub enum ServerMessage {
     ChatMessage { username: String, message: String },
     JoinedRoom { username: String },
     LeftRoom { username: String },
-    Error { message: String },
+    Error { code: ErrorCode, message: String },
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    InvalidMessage,
+    UnexpectedMessage,
+    EmptyUsername,
+    UsernameTooLong,
+    UsernameTaken,
+    EmptyRoom,
+    RoomNameTooLong,
+    UnsupportedMessage,
+    MessageTooLarge,
 }
 
 #[derive(Deserialize, Debug)]

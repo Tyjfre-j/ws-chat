@@ -7,11 +7,13 @@ use axum::{
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::protocol::{ClientMessage, Received, ServerMessage};
+use crate::protocol::{ClientMessage, ErrorCode, Received, ServerMessage};
 use crate::state::AppState;
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 const MAX_CHAT_MESSAGE_LEN: usize = 4 * 1024;
+const MAX_USERNAME_LEN: usize = 64;
+const MAX_ROOM_NAME_LEN: usize = 64;
 
 pub async fn handle_health() -> &'static str {
     "OK"
@@ -33,8 +35,9 @@ async fn send_server_message(socket: &mut WebSocket, msg: &ServerMessage) -> boo
     }
 }
 
-async fn send_error(socket: &mut WebSocket, message: &str) -> bool {
+async fn send_error(socket: &mut WebSocket, code: ErrorCode, message: &str) -> bool {
     let error_reply = ServerMessage::Error {
+        code,
         message: message.to_string(),
     };
     send_server_message(socket, &error_reply).await
@@ -81,13 +84,17 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
             Received::Invalid => {
-                send_error(socket, "invalid message format").await;
+                send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await;
                 continue;
             }
             Received::Message(ClientMessage::SetUsername { username }) => {
                 let username = username.trim();
                 if username.is_empty() {
-                    send_error(socket, "username cannot be empty").await;
+                    send_error(socket, ErrorCode::EmptyUsername, "username cannot be empty").await;
+                    continue;
+                }
+                if username.len() > MAX_USERNAME_LEN {
+                    send_error(socket, ErrorCode::UsernameTooLong, "username is too long").await;
                     continue;
                 }
                 return Some(username.to_string());
@@ -96,7 +103,12 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
                 continue;
             }
             Received::Message(_) => {
-                send_error(socket, "expected SetUsername message").await;
+                send_error(
+                    socket,
+                    ErrorCode::UnexpectedMessage,
+                    "expected SetUsername message",
+                )
+                .await;
                 continue;
             }
         }
@@ -119,7 +131,7 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
             Received::Invalid => {
-                send_error(socket, "invalid message format").await;
+                send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await;
                 continue;
             }
             Received::Message(ClientMessage::ConfirmUsername { confirmed }) => {
@@ -129,7 +141,12 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
                 continue;
             }
             Received::Message(_) => {
-                send_error(socket, "expected ConfirmUsername message").await;
+                send_error(
+                    socket,
+                    ErrorCode::UnexpectedMessage,
+                    "expected ConfirmUsername message",
+                )
+                .await;
                 continue;
             }
         }
@@ -142,7 +159,12 @@ async fn get_confirmed_username(socket: &mut WebSocket, state: &AppState) -> Opt
         match confirm_username(socket, &username).await? {
             true => match state.usernames.entry(username.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(_) => {
-                    send_error(socket, "username is already taken").await;
+                    send_error(
+                        socket,
+                        ErrorCode::UsernameTaken,
+                        "username is already taken",
+                    )
+                    .await;
                     continue;
                 }
                 dashmap::mapref::entry::Entry::Vacant(entry) => {
@@ -170,13 +192,17 @@ async fn select_room(socket: &mut WebSocket, state: &AppState) -> Option<String>
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
             Received::Invalid => {
-                send_error(socket, "invalid message format").await;
+                send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await;
                 continue;
             }
             Received::Message(ClientMessage::JoinRoom { room }) => {
                 let room = room.trim();
                 if room.is_empty() {
-                    send_error(socket, "room name cannot be empty").await;
+                    send_error(socket, ErrorCode::EmptyRoom, "room name cannot be empty").await;
+                    continue;
+                }
+                if room.len() > MAX_ROOM_NAME_LEN {
+                    send_error(socket, ErrorCode::RoomNameTooLong, "room name is too long").await;
                     continue;
                 }
                 return Some(room.to_string());
@@ -185,7 +211,12 @@ async fn select_room(socket: &mut WebSocket, state: &AppState) -> Option<String>
                 continue;
             }
             Received::Message(_) => {
-                send_error(socket, "expected JoinRoom message").await;
+                send_error(
+                    socket,
+                    ErrorCode::UnexpectedMessage,
+                    "expected JoinRoom message",
+                )
+                .await;
                 continue;
             }
         }
@@ -228,14 +259,19 @@ async fn handle_client_message(
         Message::Text(text) => text,
         Message::Close(_) => return false,
         Message::Binary(_) => {
-            send_error(socket, "only text messages are supported").await;
+            send_error(
+                socket,
+                ErrorCode::UnsupportedMessage,
+                "only text messages are supported",
+            )
+            .await;
             return true;
         }
         _ => return true,
     };
 
     if text.len() > MAX_CHAT_MESSAGE_LEN {
-        send_error(socket, "message too large").await;
+        send_error(socket, ErrorCode::MessageTooLarge, "message too large").await;
         return true;
     }
 
@@ -250,14 +286,19 @@ async fn handle_client_message(
         }
 
         Ok(_) => {
-            send_error(socket, "unexpected message at this stage").await;
+            send_error(
+                socket,
+                ErrorCode::UnexpectedMessage,
+                "unexpected message at this stage",
+            )
+            .await;
         }
 
         Err(e) => {
             eprintln!("failed to parse client message during chat");
             eprintln!("  received: {text:?}");
             eprintln!("  error: {e}");
-            send_error(socket, "invalid message format").await;
+            send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await;
         }
     }
 
