@@ -1,6 +1,6 @@
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 pub fn init() -> WorkerGuard {
     let file_appender = tracing_appender::rolling::daily("logs", "server.log");

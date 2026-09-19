@@ -24,6 +24,7 @@ pub enum ErrorCode {
     RoomNameTooLong,
     UnsupportedMessage,
     MessageTooLarge,
+    LaggedBehind,
 }
 
 #[derive(Deserialize, Debug)]

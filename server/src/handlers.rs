@@ -50,7 +50,7 @@ async fn receive_client_message(socket: &mut WebSocket) -> Received {
     let msg = match msg {
         Ok(msg) => msg,
         Err(e) => {
-            eprintln!("error receiving message from client: {e}");
+            tracing::warn!(error = %e, "error receiving message from client");
             return Received::Disconnected;
         }
     };
@@ -71,9 +71,7 @@ async fn receive_client_message(socket: &mut WebSocket) -> Received {
     match serde_json::from_str::<ClientMessage>(&text) {
         Ok(parsed) => Received::Message(parsed),
         Err(e) => {
-            eprintln!("failed to parse client message during setup");
-            eprintln!("  received: {text:?}");
-            eprintln!("  error: {e}");
+            tracing::warn!(error = %e, raw = %text, "failed to parse client message during setup");
             Received::Invalid
         }
     }
@@ -84,17 +82,35 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
             Received::Invalid => {
-                send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await;
+                if !send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await {
+                    tracing::warn!(
+                        "failed to notify client of invalid message; socket likely dead"
+                    );
+                    return None;
+                }
                 continue;
             }
             Received::Message(ClientMessage::SetUsername { username }) => {
                 let username = username.trim();
                 if username.is_empty() {
-                    send_error(socket, ErrorCode::EmptyUsername, "username cannot be empty").await;
+                    if !send_error(socket, ErrorCode::EmptyUsername, "username cannot be empty")
+                        .await
+                    {
+                        tracing::warn!(
+                            "failed to notify client of empty username; socket likely dead"
+                        );
+                        return None;
+                    }
                     continue;
                 }
                 if username.len() > MAX_USERNAME_LEN {
-                    send_error(socket, ErrorCode::UsernameTooLong, "username is too long").await;
+                    if !send_error(socket, ErrorCode::UsernameTooLong, "username is too long").await
+                    {
+                        tracing::warn!(
+                            "failed to notify client of long username; socket likely dead"
+                        );
+                        return None;
+                    }
                     continue;
                 }
                 return Some(username.to_string());
@@ -103,12 +119,18 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
                 continue;
             }
             Received::Message(_) => {
-                send_error(
+                if !send_error(
                     socket,
                     ErrorCode::UnexpectedMessage,
                     "expected SetUsername message",
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(
+                        "failed to notify client of unexpected message; socket likely dead"
+                    );
+                    return None;
+                }
                 continue;
             }
         }
@@ -131,7 +153,12 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
             Received::Invalid => {
-                send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await;
+                if !send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await {
+                    tracing::warn!(
+                        "failed to notify client of invalid message; socket likely dead"
+                    );
+                    return None;
+                }
                 continue;
             }
             Received::Message(ClientMessage::ConfirmUsername { confirmed }) => {
@@ -141,12 +168,18 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
                 continue;
             }
             Received::Message(_) => {
-                send_error(
+                if !send_error(
                     socket,
                     ErrorCode::UnexpectedMessage,
                     "expected ConfirmUsername message",
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(
+                        "failed to notify client of unexpected message; socket likely dead"
+                    );
+                    return None;
+                }
                 continue;
             }
         }
@@ -159,12 +192,18 @@ async fn get_confirmed_username(socket: &mut WebSocket, state: &AppState) -> Opt
         match confirm_username(socket, &username).await? {
             true => match state.usernames.entry(username.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(_) => {
-                    send_error(
+                    if !send_error(
                         socket,
                         ErrorCode::UsernameTaken,
                         "username is already taken",
                     )
-                    .await;
+                    .await
+                    {
+                        tracing::warn!(
+                            "failed to notify client of taken username; socket likely dead"
+                        );
+                        return None;
+                    }
                     continue;
                 }
                 dashmap::mapref::entry::Entry::Vacant(entry) => {
@@ -192,17 +231,35 @@ async fn select_room(socket: &mut WebSocket, state: &AppState) -> Option<String>
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
             Received::Invalid => {
-                send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await;
+                if !send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await {
+                    tracing::warn!(
+                        "failed to notify client of invalid message; socket likely dead"
+                    );
+                    return None;
+                }
                 continue;
             }
             Received::Message(ClientMessage::JoinRoom { room }) => {
                 let room = room.trim();
                 if room.is_empty() {
-                    send_error(socket, ErrorCode::EmptyRoom, "room name cannot be empty").await;
+                    if !send_error(socket, ErrorCode::EmptyRoom, "room name cannot be empty").await
+                    {
+                        tracing::warn!(
+                            "failed to notify client of empty room name; socket likely dead"
+                        );
+                        return None;
+                    }
                     continue;
                 }
                 if room.len() > MAX_ROOM_NAME_LEN {
-                    send_error(socket, ErrorCode::RoomNameTooLong, "room name is too long").await;
+                    if !send_error(socket, ErrorCode::RoomNameTooLong, "room name is too long")
+                        .await
+                    {
+                        tracing::warn!(
+                            "failed to notify client of long room name; socket likely dead"
+                        );
+                        return None;
+                    }
                     continue;
                 }
                 return Some(room.to_string());
@@ -211,12 +268,18 @@ async fn select_room(socket: &mut WebSocket, state: &AppState) -> Option<String>
                 continue;
             }
             Received::Message(_) => {
-                send_error(
+                if !send_error(
                     socket,
                     ErrorCode::UnexpectedMessage,
                     "expected JoinRoom message",
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(
+                        "failed to notify client of unexpected message; socket likely dead"
+                    );
+                    return None;
+                }
                 continue;
             }
         }
@@ -230,8 +293,15 @@ async fn forward_broadcast_message(
     match result {
         Ok(msg) => send_server_message(socket, &msg).await,
         Err(RecvError::Lagged(count)) => {
-            eprintln!("lagged behind by {count} messages");
-            true
+            tracing::warn!(lagged_by = count, "client lagged behind broadcast channel");
+            send_server_message(
+                socket,
+                &ServerMessage::Error {
+                    code: ErrorCode::LaggedBehind,
+                    message: format!("You missed {count} messages due to lag."),
+                },
+            )
+            .await
         }
         Err(RecvError::Closed) => false,
     }
@@ -250,7 +320,7 @@ async fn handle_client_message(
     let msg = match result {
         Ok(msg) => msg,
         Err(e) => {
-            eprintln!("error receiving message from client: {e}");
+            tracing::warn!(error = %e, "error receiving message from client");
             return false;
         }
     };
@@ -259,19 +329,28 @@ async fn handle_client_message(
         Message::Text(text) => text,
         Message::Close(_) => return false,
         Message::Binary(_) => {
-            send_error(
+            if !send_error(
                 socket,
                 ErrorCode::UnsupportedMessage,
                 "only text messages are supported",
             )
-            .await;
+            .await
+            {
+                tracing::warn!(
+                    "failed to notify client of unsupported message; socket likely dead"
+                );
+                return false;
+            }
             return true;
         }
         _ => return true,
     };
 
     if text.len() > MAX_CHAT_MESSAGE_LEN {
-        send_error(socket, ErrorCode::MessageTooLarge, "message too large").await;
+        if !send_error(socket, ErrorCode::MessageTooLarge, "message too large").await {
+            tracing::warn!("failed to notify client of oversized message; socket likely dead");
+            return false;
+        }
         return true;
     }
 
@@ -281,24 +360,26 @@ async fn handle_client_message(
                 username: username.to_string(),
                 message,
             };
-
             let _ = tx.send(reply);
         }
-
         Ok(_) => {
-            send_error(
+            if !send_error(
                 socket,
                 ErrorCode::UnexpectedMessage,
                 "unexpected message at this stage",
             )
-            .await;
+            .await
+            {
+                tracing::warn!("failed to notify client of unexpected message; socket likely dead");
+                return false;
+            }
         }
-
         Err(e) => {
-            eprintln!("failed to parse client message during chat");
-            eprintln!("  received: {text:?}");
-            eprintln!("  error: {e}");
-            send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await;
+            tracing::warn!(error = %e, raw = %text, "failed to parse client message during chat");
+            if !send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await {
+                tracing::warn!("failed to notify client of invalid message; socket likely dead");
+                return false;
+            }
         }
     }
 
@@ -348,7 +429,7 @@ async fn run_chat_loop(socket: &mut WebSocket, state: &AppState, username: Strin
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
-    tracing::info!("client connected");
+    tracing::info!("new client connected");
     if !send_server_message(&mut socket, &ServerMessage::Welcome).await {
         return;
     }
