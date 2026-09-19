@@ -29,7 +29,7 @@ async fn send_server_message(socket: &mut WebSocket, msg: &ServerMessage) -> boo
     match socket.send(Message::Text(text.into())).await {
         Ok(()) => true,
         Err(e) => {
-            eprintln!("failed to send message ({msg:?}): {e}");
+            tracing::warn!(error = %e, message = ?msg, "failed to send message to client");
             false
         }
     }
@@ -348,6 +348,7 @@ async fn run_chat_loop(socket: &mut WebSocket, state: &AppState, username: Strin
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    tracing::info!("client connected");
     if !send_server_message(&mut socket, &ServerMessage::Welcome).await {
         return;
     }

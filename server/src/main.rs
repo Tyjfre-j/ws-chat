@@ -1,4 +1,5 @@
 mod handlers;
+mod logging;
 mod protocol;
 mod state;
 
@@ -11,6 +12,8 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() {
+    let _guard = logging::init();
+
     let state = AppState {
         rooms: Arc::new(DashMap::new()),
         usernames: Arc::new(DashMap::new()),
