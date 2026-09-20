@@ -14,6 +14,10 @@ pub async fn run_connection(
     app: &mut App,
     events_stream: &mut EventStream,
 ) -> std::io::Result<ConnectionOutcome> {
+    app.connected = false;
+    app.stage = ClientStage::Connecting;
+    terminal.draw(|frame| crate::ui::render(frame, app))?;
+
     let ws_stream = match connect_async("ws://127.0.0.1:3000/ws").await {
         Ok((ws_stream, _response)) => ws_stream,
         Err(e) => {
