@@ -38,9 +38,13 @@ pub async fn run_connection(
             key_event = events_stream.next() => {
                 match key_event {
                     Some(Ok(crossterm::event::Event::Key(key))) => {
-                        if let KeyOutcome::Quit = events::handle_key(app, &mut write, key).await {
-                            let _ = write.close().await;
-                            return Ok(ConnectionOutcome::Quit);
+                        match events::handle_key(app, &mut write, key).await {
+                            KeyOutcome::Quit => {
+                                let _ = write.close().await;
+                                return Ok(ConnectionOutcome::Quit);
+                            }
+                            KeyOutcome::Disconnected => break,
+                            KeyOutcome::Continue => {}
                         }
                     }
                     Some(Ok(_)) => {}
