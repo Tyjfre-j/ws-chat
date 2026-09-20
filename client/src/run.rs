@@ -26,8 +26,9 @@ pub async fn run_connection(
     let ws_stream = match connect_async(&server_url).await {
         Ok((ws_stream, _response)) => ws_stream,
         Err(e) => {
+            tracing::warn!(error = %e, server_url = %server_url, "failed to connect to server");
             app.connected = false;
-            app.push_message(format!("Failed to connect: {e}"));
+            app.push_message("Couldn't reach the server.".to_string());
             app.stage = ClientStage::Disconnected;
             return Ok(ConnectionOutcome::FailedToConnect);
         }
