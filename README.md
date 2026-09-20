@@ -1,5 +1,7 @@
 # ws-chat
 
+[![CI](https://github.com/Tyjfre-j/ws-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/Tyjfre-j/ws-chat/actions/workflows/ci.yml)
+
 A real-time terminal chat application built with WebSockets and Rust.
 
 The server is built with `axum` and `tokio`. The client is a terminal UI built with `ratatui`.
@@ -29,11 +31,16 @@ The server runs one asynchronous task per connection in `handle_socket`. During 
 
 The client uses one asynchronous event loop to race the WebSocket read stream against `crossterm::event::EventStream`, so incoming messages and keyboard input remain responsive at the same time.
 
+### Shared (`protocol/`)
+
+- `lib.rs` - the wire-message types (`ClientMessage`, `ServerMessage`, `ErrorCode`) used by both `server/` and `client/`
+
 ### Server (`server/`)
 
 - `handlers.rs` - connection lifecycle, handshake, room selection, chat handling, broadcasting, and cleanup
 - `state.rs` - shared application state: active rooms and reserved usernames
-- `../protocol/` - shared server/client wire-message definitions
+- `protocol.rs` - re-exports the shared wire types and adds server-only helpers (`Received`)
+- `logging.rs` - file + console tracing setup
 
 Each room uses a `tokio::sync::broadcast` channel with a capacity of 256. Joining a room subscribes a client to that channel, and chat messages are broadcast to all subscribers. If a client falls behind, `broadcast::error::RecvError::Lagged` is logged and the client continues from the newest available message. A closed channel or socket error ends the session.
 
@@ -46,6 +53,8 @@ Rooms are created lazily when a client joins a non-empty room name and removed a
 - `net.rs` - serialization and incoming server-message dispatch
 - `app.rs` - application state and server-message handling
 - `ui.rs` - status bar, ↑/↓ scrolling message log, and a trailing-input viewport for long text
+- `protocol.rs` - re-exports the shared wire types and adds client-only state (`ClientStage`, `ConnectionOutcome`)
+- `logging.rs` - file tracing setup
 
 ## Protocol
 
@@ -72,20 +81,20 @@ Messages are JSON text frames tagged with `type` and an optional `data` payload:
 ### Server to client
 
 | Type                      | Payload                                   | When                                                    |
-| ------------------------- | ----------------------------------------- | ------------------------------------------------------- |
-| `Welcome`                 | None                                      | Immediately after connecting                            |
-| `ConfirmUsername`         | `{ "username": "..." }`                   | Echoing the proposed username for confirmation          |
-| `RoomList`                | `{ "rooms": ["..."] }`                    | After the username is confirmed                         |
-| `RoomJoined`              | `{ "room": "..." }`                       | Confirming that the client joined its chosen room        |
-| `ChatMessage`             | `{ "username": "...", "message": "..." }` | Broadcast to everyone in the room, including the sender |
-| `JoinedRoom` / `LeftRoom` | `{ "username": "..." }`                   | Presence notifications                                  |
-| `Error`                   | `{ "code": "...", "message": "..." }`     | Validation or protocol errors                           |
+| ------------------------- | ------------------------------------------ | ------------------------------------------------------- |
+| `Welcome`                 | None                                       | Immediately after connecting                            |
+| `ConfirmUsername`         | `{ "username": "..." }`                    | Echoing the proposed username for confirmation          |
+| `RoomList`                | `{ "rooms": ["..."] }`                     | After the username is confirmed                         |
+| `RoomJoined`              | `{ "room": "..." }`                        | Confirming that the client joined its chosen room       |
+| `ChatMessage`             | `{ "username": "...", "message": "..." }`  | Broadcast to everyone in the room, including the sender |
+| `JoinedRoom` / `LeftRoom` | `{ "username": "..." }`                    | Presence notifications                                  |
+| `Error`                   | `{ "code": "...", "message": "..." }`      | Validation or protocol errors                           |
 
 - **Structured protocol errors:** Error responses include a stable machine-readable `code` and a human-readable `message`. The client uses relevant codes to recover from username and room validation errors and displays the message to the user.
 
 ## Running it
 
-Requires stable Rust and Cargo.
+Requires Rust 1.85+ and Cargo (the workspace uses the 2024 edition).
 
 From the repository root, start the server:
 
