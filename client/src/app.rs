@@ -48,8 +48,12 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
             app.push_message(format!("{} left the room", username));
         }
         ServerMessage::Error { code, message } => {
-            if code == ErrorCode::UsernameTaken {
-                app.stage = ClientStage::SetUsername;
+            match code {
+                ErrorCode::UsernameTaken => app.stage = ClientStage::SetUsername,
+                ErrorCode::EmptyRoom | ErrorCode::RoomNameTooLong => {
+                    app.stage = ClientStage::SelectRoom;
+                }
+                _ => {}
             }
             app.push_message(format!("Error from server: {}", message));
         }
