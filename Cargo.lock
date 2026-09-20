@@ -257,6 +257,11 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "unicode-width",
+ "ws-chat-protocol",
 ]
 
 [[package]]
@@ -2482,6 +2487,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
+name = "ws-chat-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "ws-chat-server"
 version = "0.1.0"
 dependencies = [
@@ -2494,6 +2506,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "ws-chat-protocol",
 ]
 
 [[package]]

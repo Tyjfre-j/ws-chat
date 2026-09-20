@@ -13,3 +13,4 @@ tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry"] }
+ws-chat-protocol = { path = "../protocol" }
