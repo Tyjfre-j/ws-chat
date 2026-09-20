@@ -9,10 +9,10 @@ The server is built with `axum` and `tokio`. The client is a terminal UI built w
 - Persistent WebSocket connections with a defined handshake: username, confirmation, room selection, then chat
 - Real-time message broadcasting within rooms, including to the sender
 - Multiple rooms with join and leave notifications visible to other participants
-- Client UI status stages: Connecting, Entering Username, Confirming Username, Selecting Room, Chatting, and Disconnected
+- Client UI status stages: Connecting, Entering Username, Confirming Username, Selecting Room, Joining Room, Chatting, and Disconnected
 - Automatic reconnection with exponential backoff: 1s, 2s, 4s, and so on, capped at 30s
 - Retry interruption with `Esc`
-- Graceful handling of malformed input, empty fields, duplicate usernames, and unexpected disconnects; chat requests larger than 4 KiB receive an error without closing the connection
+- Graceful handling of malformed input, empty fields, case-insensitive duplicate usernames, unsupported binary frames, and unexpected disconnects; chat messages larger than 4 KiB receive an error without closing the connection
 - Per-room broadcast channels with lag tolerance: a slow client skips missed messages instead of stalling the room
 - Automatic room cleanup after the last participant leaves
 
@@ -33,7 +33,7 @@ The client uses one asynchronous event loop to race the WebSocket read stream ag
 
 - `handlers.rs` - connection lifecycle, handshake, room selection, chat handling, broadcasting, and cleanup
 - `state.rs` - shared application state: active rooms and reserved usernames
-- `protocol.rs` - server and client wire-message definitions
+- `../protocol/` - shared server/client wire-message definitions
 
 Each room uses a `tokio::sync::broadcast` channel with a capacity of 256. Joining a room subscribes a client to that channel, and chat messages are broadcast to all subscribers. If a client falls behind, `broadcast::error::RecvError::Lagged` is logged and the client continues from the newest available message. A closed channel or socket error ends the session.
 
@@ -76,6 +76,7 @@ Messages are JSON text frames tagged with `type` and an optional `data` payload:
 | `Welcome`                 | None                                      | Immediately after connecting                            |
 | `ConfirmUsername`         | `{ "username": "..." }`                   | Echoing the proposed username for confirmation          |
 | `RoomList`                | `{ "rooms": ["..."] }`                    | After the username is confirmed                         |
+| `RoomJoined`              | `{ "room": "..." }`                       | Confirming that the client joined its chosen room        |
 | `ChatMessage`             | `{ "username": "...", "message": "..." }` | Broadcast to everyone in the room, including the sender |
 | `JoinedRoom` / `LeftRoom` | `{ "username": "..." }`                   | Presence notifications                                  |
 | `Error`                   | `{ "code": "...", "message": "..." }`     | Validation or protocol errors                           |
@@ -98,17 +99,25 @@ In another terminal, start one or more clients:
 cargo run -p client
 ```
 
-The server listens on `127.0.0.1:3000`.
+The server listens on `127.0.0.1:3000` by default.
 
 - WebSocket endpoint: `ws://127.0.0.1:3000/ws`
 - Health endpoint: `http://127.0.0.1:3000/health`
+
+Configuration is optional and uses environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WS_CHAT_SERVER_ADDR` | `127.0.0.1:3000` | Address on which the server listens |
+| `WS_CHAT_SERVER_URL` | `ws://127.0.0.1:3000/ws` | WebSocket URL used by the client |
+| `WS_CHAT_LOG_DIR` | `logs` | Directory for client and server log files |
 
 Run multiple client instances in separate terminals to chat between them. Since rooms are created lazily, the first client can enter a new non-empty room name; later clients will see that room in their room list.
 
 ## Design decisions
 
 - **Server-authoritative chat:** The client does not locally echo sent messages. It waits for the server to broadcast the message back, so every participant receives the same server-generated message.
-- **Two-tier message-size limits:** The server rejects incoming chat JSON text larger than 4 KiB with an error while keeping the connection open. Axum also applies a 64 KiB maximum WebSocket message size as a protocol-level backstop; exceeding that limit ends the connection. The 4 KiB application check applies to the serialized request, not only the value of the `message` field.
+- **Two-tier message-size limits:** The server rejects chat text larger than 4 KiB with an error while keeping the connection open. Axum also applies a 64 KiB maximum WebSocket message size as a protocol-level backstop; exceeding that limit ends the connection.
 - **Reconnection never gives up:** Failed connection attempts use exponential backoff capped at 30 seconds. After a connection was established and later disconnected, the next retry starts at 1 second.
 - **Control frames are separate from application messages:** Ping and pong frames are ignored by the application rather than parsed as JSON. Binary frames are rejected, and close frames end the session. The server and client do not implement a separate application-level heartbeat.
 
@@ -119,4 +128,5 @@ Run multiple client instances in separate terminals to chat between them. Since 
 - Single server instance. There is no cross-server message delivery. Horizontal scaling would require shared messaging infrastructure such as Redis Pub/Sub.
 - No typing indicators.
 - Room lists are snapshots sent during the handshake; clients are not notified when rooms are created or removed afterward.
+- Setup has no timeout, so an idle client can hold a connection during the handshake.
 - No automated tests are currently included.

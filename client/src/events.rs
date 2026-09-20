@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::Sink;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -12,15 +12,34 @@ pub enum KeyOutcome {
     Continue,
 }
 
+const MAX_INPUT_LEN: usize = 4 * 1024;
+
 pub async fn handle_key<S>(app: &mut App, write: &mut S, key: KeyEvent) -> KeyOutcome
 where
     S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
+    if key.kind != KeyEventKind::Press {
+        return KeyOutcome::Continue;
+    }
+
     match key.code {
-        KeyCode::Char(c) => app.input.push(c),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            return KeyOutcome::Quit;
+        }
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            if app.input.len() + c.len_utf8() <= MAX_INPUT_LEN {
+                app.input.push(c);
+            }
+        }
         KeyCode::Backspace => {
             app.input.pop();
         }
+        KeyCode::Up => app.scroll_messages_up(),
+        KeyCode::Down => app.scroll_messages_down(),
         KeyCode::Enter => {
             let input = std::mem::take(&mut app.input);
             return handle_enter(app, write, input).await;
@@ -58,7 +77,6 @@ where
                 let msg = ClientMessage::ConfirmUsername { confirmed: true };
                 if !net::send_msg(write, &msg).await {
                     tracing::warn!("failed to send username confirmation; connection likely dead");
-                    app.input = input;
                     mark_disconnected(app, "Failed to confirm username. Connection lost.");
                     return KeyOutcome::Disconnected;
                 }
@@ -67,7 +85,6 @@ where
                 let msg = ClientMessage::ConfirmUsername { confirmed: false };
                 if !net::send_msg(write, &msg).await {
                     tracing::warn!("failed to send username rejection; connection likely dead");
-                    app.input = input;
                     mark_disconnected(app, "Failed to send response. Connection lost.");
                     return KeyOutcome::Disconnected;
                 }
@@ -94,13 +111,16 @@ where
                 mark_disconnected(app, "Failed to join room. Connection lost.");
                 return KeyOutcome::Disconnected;
             } else {
-                app.stage = ClientStage::Chatting { room };
+                app.stage = ClientStage::JoiningRoom { room };
             }
         }
         ClientStage::Chatting { .. } => {
-            let msg = ClientMessage::ChatMessage {
-                message: input.clone(),
-            };
+            let message = input.trim().to_string();
+            if message.is_empty() {
+                app.push_message("Message cannot be empty.".to_string());
+                return KeyOutcome::Continue;
+            }
+            let msg = ClientMessage::ChatMessage { message };
             if !net::send_msg(write, &msg).await {
                 tracing::warn!("failed to send chat message; connection likely dead");
                 app.input = input;
@@ -108,7 +128,7 @@ where
                 return KeyOutcome::Disconnected;
             }
         }
-        ClientStage::Connecting | ClientStage::Disconnected => {
+        ClientStage::Connecting | ClientStage::Disconnected | ClientStage::JoiningRoom { .. } => {
             // no live connection to send on; ignore input
         }
     }

@@ -9,16 +9,21 @@ use crate::net;
 use crate::protocol::ClientStage;
 use crate::protocol::ConnectionOutcome;
 
+const DEFAULT_SERVER_URL: &str = "ws://127.0.0.1:3000/ws";
+
 pub async fn run_connection(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     events_stream: &mut EventStream,
 ) -> std::io::Result<ConnectionOutcome> {
     app.connected = false;
+    app.input.clear();
     app.stage = ClientStage::Connecting;
     terminal.draw(|frame| crate::ui::render(frame, app))?;
 
-    let ws_stream = match connect_async("ws://127.0.0.1:3000/ws").await {
+    let server_url =
+        std::env::var("WS_CHAT_SERVER_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+    let ws_stream = match connect_async(&server_url).await {
         Ok((ws_stream, _response)) => ws_stream,
         Err(e) => {
             app.connected = false;
@@ -35,13 +40,24 @@ pub async fn run_connection(
 
         tokio::select! {
             server_msg = read.next() => {
+                let server_msg = match server_msg {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(payload))) => {
+                        if let Err(error) = write.send(tokio_tungstenite::tungstenite::Message::Pong(payload)).await {
+                            tracing::warn!(%error, "failed to respond to server ping");
+                            break;
+                        }
+                        continue;
+                    }
+                    message => message,
+                };
                 if !net::handle_incoming(app, server_msg) {
                     break;
                 }
             }
             key_event = events_stream.next() => {
                 match key_event {
-                    Some(Ok(crossterm::event::Event::Key(key))) => {
+                    Some(Ok(crossterm::event::Event::Key(key)))
+                        if key.kind == crossterm::event::KeyEventKind::Press => {
                         match events::handle_key(app, &mut write, key).await {
                             KeyOutcome::Quit => {
                                 let _ = write.close().await;
@@ -52,7 +68,7 @@ pub async fn run_connection(
                         }
                     }
                     Some(Ok(_)) => {}
-                    Some(Err(e)) => eprintln!("error reading key event: {e:?}"),
+                    Some(Err(e)) => tracing::warn!(error = ?e, "error reading key event"),
                     None => break,
                 }
             }
@@ -111,7 +127,8 @@ async fn wait_before_retry(
             key_event = events_stream.next() => {
                 match key_event {
                     Some(Ok(crossterm::event::Event::Key(key)))
-                        if key.code == crossterm::event::KeyCode::Esc => return Ok(true),
+                        if key.kind == crossterm::event::KeyEventKind::Press
+                            && key.code == crossterm::event::KeyCode::Esc => return Ok(true),
                     Some(_) => {}
                     None => return Ok(false),
                 }

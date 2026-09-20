@@ -4,6 +4,8 @@ use crate::protocol::{ClientStage, ErrorCode, ServerMessage};
 pub struct App {
     pub input: String,
     pub messages: Vec<String>,
+    /// Number of newest messages hidden while viewing scrollback.
+    pub message_scroll: usize,
     pub connected: bool,
     pub stage: ClientStage,
 }
@@ -12,10 +14,22 @@ impl App {
     const MAX_MESSAGES: usize = 200;
 
     pub fn push_message(&mut self, message: String) {
+        if self.message_scroll > 0 {
+            self.message_scroll += 1;
+        }
         self.messages.push(message);
         if self.messages.len() > Self::MAX_MESSAGES {
             self.messages.remove(0);
+            self.message_scroll = self.message_scroll.saturating_sub(1);
         }
+    }
+
+    pub fn scroll_messages_up(&mut self) {
+        self.message_scroll = (self.message_scroll + 1).min(self.messages.len());
+    }
+
+    pub fn scroll_messages_down(&mut self) {
+        self.message_scroll = self.message_scroll.saturating_sub(1);
     }
 }
 
@@ -38,6 +52,10 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
             app.push_message(format!("Available rooms: {:?}", rooms));
             app.stage = ClientStage::SelectRoom;
         }
+        ServerMessage::RoomJoined { room } => {
+            app.push_message(format!("Joined room {room}"));
+            app.stage = ClientStage::Chatting { room };
+        }
         ServerMessage::ChatMessage { username, message } => {
             app.push_message(format!("[{}]: {}", username, message));
         }
@@ -53,6 +71,12 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
                 ErrorCode::EmptyRoom | ErrorCode::RoomNameTooLong => {
                     app.stage = ClientStage::SelectRoom;
                 }
+                ErrorCode::InvalidMessage | ErrorCode::UnexpectedMessage => {
+                    if matches!(app.stage, ClientStage::JoiningRoom { .. }) {
+                        app.stage = ClientStage::SelectRoom;
+                    }
+                }
+                ErrorCode::EmptyChatMessage => {}
                 _ => {}
             }
             app.push_message(format!("Error from server: {}", message));

@@ -15,6 +15,10 @@ const MAX_CHAT_MESSAGE_LEN: usize = 4 * 1024;
 const MAX_USERNAME_LEN: usize = 64;
 const MAX_ROOM_NAME_LEN: usize = 64;
 
+fn has_control_characters(value: &str) -> bool {
+    value.chars().any(char::is_control)
+}
+
 pub async fn handle_health() -> &'static str {
     "OK"
 }
@@ -60,9 +64,7 @@ async fn receive_client_message(socket: &mut WebSocket) -> Received {
         Message::Close(_) => {
             return Received::Disconnected;
         }
-        Message::Binary(_) => {
-            return Received::Invalid;
-        }
+        Message::Binary(_) => return Received::Unsupported,
         _ => {
             return Received::Ignored;
         }
@@ -81,6 +83,21 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
     loop {
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
+            Received::Unsupported => {
+                if !send_error(
+                    socket,
+                    ErrorCode::UnsupportedMessage,
+                    "only text messages are supported",
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "failed to notify client of unsupported message; socket likely dead"
+                    );
+                    return None;
+                }
+                continue;
+            }
             Received::Invalid => {
                 if !send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await {
                     tracing::warn!(
@@ -103,12 +120,24 @@ async fn set_username(socket: &mut WebSocket) -> Option<String> {
                     }
                     continue;
                 }
-                if username.len() > MAX_USERNAME_LEN {
+                if username.chars().count() > MAX_USERNAME_LEN {
                     if !send_error(socket, ErrorCode::UsernameTooLong, "username is too long").await
                     {
                         tracing::warn!(
                             "failed to notify client of long username; socket likely dead"
                         );
+                        return None;
+                    }
+                    continue;
+                }
+                if has_control_characters(username) {
+                    if !send_error(
+                        socket,
+                        ErrorCode::InvalidMessage,
+                        "username cannot contain control characters",
+                    )
+                    .await
+                    {
                         return None;
                     }
                     continue;
@@ -152,6 +181,21 @@ async fn confirm_username(socket: &mut WebSocket, username: &str) -> Option<bool
     loop {
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
+            Received::Unsupported => {
+                if !send_error(
+                    socket,
+                    ErrorCode::UnsupportedMessage,
+                    "only text messages are supported",
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "failed to notify client of unsupported message; socket likely dead"
+                    );
+                    return None;
+                }
+                continue;
+            }
             Received::Invalid => {
                 if !send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await {
                     tracing::warn!(
@@ -190,7 +234,7 @@ async fn get_confirmed_username(socket: &mut WebSocket, state: &AppState) -> Opt
     loop {
         let username = set_username(socket).await?;
         match confirm_username(socket, &username).await? {
-            true => match state.usernames.entry(username.clone()) {
+            true => match state.usernames.entry(username.to_lowercase()) {
                 dashmap::mapref::entry::Entry::Occupied(_) => {
                     if !send_error(
                         socket,
@@ -230,6 +274,21 @@ async fn select_room(socket: &mut WebSocket, state: &AppState) -> Option<String>
     loop {
         match receive_client_message(socket).await {
             Received::Disconnected => return None,
+            Received::Unsupported => {
+                if !send_error(
+                    socket,
+                    ErrorCode::UnsupportedMessage,
+                    "only text messages are supported",
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "failed to notify client of unsupported message; socket likely dead"
+                    );
+                    return None;
+                }
+                continue;
+            }
             Received::Invalid => {
                 if !send_error(socket, ErrorCode::InvalidMessage, "invalid message format").await {
                     tracing::warn!(
@@ -251,7 +310,7 @@ async fn select_room(socket: &mut WebSocket, state: &AppState) -> Option<String>
                     }
                     continue;
                 }
-                if room.len() > MAX_ROOM_NAME_LEN {
+                if room.chars().count() > MAX_ROOM_NAME_LEN {
                     if !send_error(socket, ErrorCode::RoomNameTooLong, "room name is too long")
                         .await
                     {
@@ -262,7 +321,19 @@ async fn select_room(socket: &mut WebSocket, state: &AppState) -> Option<String>
                     }
                     continue;
                 }
-                return Some(room.to_string());
+                if has_control_characters(room) {
+                    if !send_error(
+                        socket,
+                        ErrorCode::InvalidMessage,
+                        "room name cannot contain control characters",
+                    )
+                    .await
+                    {
+                        return None;
+                    }
+                    continue;
+                }
+                return Some(room.to_lowercase());
             }
             Received::Ignored => {
                 continue;
@@ -346,16 +417,46 @@ async fn handle_client_message(
         _ => return true,
     };
 
-    if text.len() > MAX_CHAT_MESSAGE_LEN {
-        if !send_error(socket, ErrorCode::MessageTooLarge, "message too large").await {
-            tracing::warn!("failed to notify client of oversized message; socket likely dead");
-            return false;
-        }
-        return true;
-    }
-
     match serde_json::from_str::<ClientMessage>(&text) {
         Ok(ClientMessage::ChatMessage { message }) => {
+            let message = message.trim().to_string();
+            if message.len() > MAX_CHAT_MESSAGE_LEN {
+                if !send_error(socket, ErrorCode::MessageTooLarge, "message too large").await {
+                    tracing::warn!(
+                        "failed to notify client of oversized message; socket likely dead"
+                    );
+                    return false;
+                }
+                return true;
+            }
+            if message.is_empty() {
+                if !send_error(
+                    socket,
+                    ErrorCode::EmptyChatMessage,
+                    "message cannot be empty",
+                )
+                .await
+                {
+                    tracing::warn!("failed to notify client of empty message; socket likely dead");
+                    return false;
+                }
+                return true;
+            }
+            if has_control_characters(&message) {
+                if !send_error(
+                    socket,
+                    ErrorCode::InvalidMessage,
+                    "message cannot contain control characters",
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "failed to notify client of invalid message; socket likely dead"
+                    );
+                    return false;
+                }
+                return true;
+            }
             let reply = ServerMessage::ChatMessage {
                 username: username.to_string(),
                 message,
@@ -396,6 +497,16 @@ async fn run_chat_loop(socket: &mut WebSocket, state: &AppState, username: Strin
         let rx = tx.subscribe();
         (tx, rx)
     };
+
+    if !send_server_message(socket, &ServerMessage::RoomJoined { room: room.clone() }).await {
+        drop(rx);
+        state
+            .rooms
+            .remove_if(&room, |_, tx: &broadcast::Sender<ServerMessage>| {
+                tx.receiver_count() == 0
+            });
+        return;
+    }
 
     let _ = tx.send(ServerMessage::JoinedRoom {
         username: username.clone(),
@@ -439,11 +550,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     };
 
     let Some(room) = select_room(&mut socket, &state).await else {
-        state.usernames.remove(&username);
+        state.usernames.remove(&username.to_lowercase());
         return;
     };
 
     run_chat_loop(&mut socket, &state, username.clone(), room).await;
 
-    state.usernames.remove(&username);
+    state.usernames.remove(&username.to_lowercase());
 }
