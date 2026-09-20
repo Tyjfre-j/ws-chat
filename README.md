@@ -8,7 +8,7 @@ The server is built with `axum` and `tokio`. The client is a terminal UI built w
 
 - Persistent WebSocket connections with a defined handshake: username, confirmation, room selection, then chat
 - Real-time message broadcasting within rooms, including to the sender
-- Multiple rooms with join and leave notifications visible to other participants
+- Multiple case-insensitive rooms with join and leave notifications visible to other participants
 - Client UI status stages: Connecting, Entering Username, Confirming Username, Selecting Room, Joining Room, Chatting, and Disconnected
 - Automatic reconnection with exponential backoff: 1s, 2s, 4s, and so on, capped at 30s
 - Retry interruption with `Esc`
@@ -37,7 +37,7 @@ The client uses one asynchronous event loop to race the WebSocket read stream ag
 
 Each room uses a `tokio::sync::broadcast` channel with a capacity of 256. Joining a room subscribes a client to that channel, and chat messages are broadcast to all subscribers. If a client falls behind, `broadcast::error::RecvError::Lagged` is logged and the client continues from the newest available message. A closed channel or socket error ends the session.
 
-Rooms are created lazily when a client joins a non-empty room name and removed after their last receiver is dropped. The room list is a snapshot of existing rooms, but clients may also enter a new non-empty room name to create it.
+Rooms are created lazily when a client joins a non-empty room name and removed after their last receiver is dropped. Room names are trimmed and normalized to lowercase, so `Lobby` and `lobby` refer to the same room. The room list is a snapshot of existing rooms, but clients may also enter a new non-empty room name to create it.
 
 ### Client (`client/`)
 
@@ -45,7 +45,7 @@ Rooms are created lazily when a client joins a non-empty room name and removed a
 - `events.rs` - keyboard handling and stage-dependent message creation
 - `net.rs` - serialization and incoming server-message dispatch
 - `app.rs` - application state and server-message handling
-- `ui.rs` - status bar, scrolling message log, and input box rendering
+- `ui.rs` - status bar, ↑/↓ scrolling message log, and a trailing-input viewport for long text
 
 ## Protocol
 
