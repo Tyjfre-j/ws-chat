@@ -33,6 +33,7 @@ pub enum ErrorCode {
     RoomNameTooLong,
     UnsupportedMessage,
     MessageTooLarge,
+    LaggedBehind,
 }
 
 #[derive(Default)]
