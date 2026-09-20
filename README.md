@@ -12,7 +12,7 @@ The server is built with `axum` and `tokio`. The client is a terminal UI built w
 - Client UI status stages: Connecting, Entering Username, Confirming Username, Selecting Room, Chatting, and Disconnected
 - Automatic reconnection with exponential backoff: 1s, 2s, 4s, and so on, capped at 30s
 - Retry interruption with `Esc`
-- Graceful handling of malformed input, empty fields, duplicate usernames, and unexpected disconnects; oversized chat requests up to 4 KiB receive an error without closing the connection
+- Graceful handling of malformed input, empty fields, duplicate usernames, and unexpected disconnects; chat requests larger than 4 KiB receive an error without closing the connection
 - Per-room broadcast channels with lag tolerance: a slow client skips missed messages instead of stalling the room
 - Automatic room cleanup after the last participant leaves
 
@@ -80,7 +80,7 @@ Messages are JSON text frames tagged with `type` and an optional `data` payload:
 | `JoinedRoom` / `LeftRoom` | `{ "username": "..." }`                   | Presence notifications                                  |
 | `Error`                   | `{ "code": "...", "message": "..." }`     | Validation or protocol errors                           |
 
-- **Structured protocol errors:** Error responses include a stable machine-readable `code` and a human-readable `message`. The client uses the code for state transitions and the message for display.
+- **Structured protocol errors:** Error responses include a stable machine-readable `code` and a human-readable `message`. The client uses relevant codes to recover from username and room validation errors and displays the message to the user.
 
 ## Running it
 
