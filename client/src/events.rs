@@ -128,9 +128,10 @@ where
                 return KeyOutcome::Disconnected;
             }
         }
-        ClientStage::Connecting | ClientStage::Disconnected | ClientStage::JoiningRoom { .. } => {
-            // no live connection to send on; ignore input
+        ClientStage::JoiningRoom { .. } => {
+            app.push_message("Still waiting to join the room...".to_string());
         }
+        ClientStage::Connecting | ClientStage::Disconnected => {}
     }
 
     KeyOutcome::Continue

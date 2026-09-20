@@ -4,7 +4,6 @@ use crate::protocol::{ClientStage, ErrorCode, ServerMessage};
 pub struct App {
     pub input: String,
     pub messages: Vec<String>,
-    /// Number of newest messages hidden while viewing scrollback.
     pub message_scroll: usize,
     pub connected: bool,
     pub stage: ClientStage,
@@ -67,17 +66,14 @@ pub fn handle_server_message(app: &mut App, msg: ServerMessage) {
         }
         ServerMessage::Error { code, message } => {
             match code {
-                ErrorCode::UsernameTaken => app.stage = ClientStage::SetUsername,
-                ErrorCode::EmptyRoom | ErrorCode::RoomNameTooLong => {
-                    app.stage = ClientStage::SelectRoom;
+                ErrorCode::UsernameTaken => {
+                    app.stage = ClientStage::SetUsername;
                 }
-                ErrorCode::InvalidMessage | ErrorCode::UnexpectedMessage => {
+                _ => {
                     if matches!(app.stage, ClientStage::JoiningRoom { .. }) {
                         app.stage = ClientStage::SelectRoom;
                     }
                 }
-                ErrorCode::EmptyChatMessage => {}
-                _ => {}
             }
             app.push_message(format!("Error from server: {}", message));
         }
