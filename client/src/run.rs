@@ -98,16 +98,20 @@ async fn wait_before_retry(
 ) -> std::io::Result<bool> {
     terminal.draw(|frame| crate::ui::render(frame, app))?;
 
-    tokio::select! {
-        _ = tokio::time::sleep(backoff) => {}
-        key_event = events_stream.next() => {
-            if let Some(Ok(crossterm::event::Event::Key(key))) = key_event
-                && key.code == crossterm::event::KeyCode::Esc
-            {
-                return Ok(true);
+    let retry_timer = tokio::time::sleep(backoff);
+    tokio::pin!(retry_timer);
+
+    loop {
+        tokio::select! {
+            _ = &mut retry_timer => return Ok(false),
+            key_event = events_stream.next() => {
+                match key_event {
+                    Some(Ok(crossterm::event::Event::Key(key)))
+                        if key.code == crossterm::event::KeyCode::Esc => return Ok(true),
+                    Some(_) => {}
+                    None => return Ok(false),
+                }
             }
         }
     }
-
-    Ok(false)
 }
