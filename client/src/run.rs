@@ -134,10 +134,10 @@ async fn wait_before_retry(
                 match key_event {
                     Some(Ok(crossterm::event::Event::Key(key)))
                         if key.kind == crossterm::event::KeyEventKind::Press => {
-                        if key.code != crossterm::event::KeyCode::Enter {
-                            if let KeyOutcome::Quit = events::handle_local_key(app, key) {
-                                return Ok(true);
-                            }
+                        if key.code != crossterm::event::KeyCode::Enter
+                            && let KeyOutcome::Quit = events::handle_local_key(app, key)
+                        {
+                            return Ok(true);
                         }
                     }
                     Some(Ok(_)) => {}
