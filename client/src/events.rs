@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::Sink;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::app::App;
+use crate::app::{App, ChatEvent};
 use crate::net;
 use crate::protocol::{ClientMessage, ClientStage};
 
@@ -14,10 +14,7 @@ pub enum KeyOutcome {
 
 const MAX_INPUT_LEN: usize = 4 * 1024;
 
-pub async fn handle_key<S>(app: &mut App, write: &mut S, key: KeyEvent) -> KeyOutcome
-where
-    S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
-{
+pub fn handle_local_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     if key.kind != KeyEventKind::Press {
         return KeyOutcome::Continue;
     }
@@ -40,20 +37,32 @@ where
         }
         KeyCode::Up => app.scroll_messages_up(),
         KeyCode::Down => app.scroll_messages_down(),
-        KeyCode::Enter => {
-            let input = std::mem::take(&mut app.input);
-            return handle_enter(app, write, input).await;
-        }
         KeyCode::Esc => return KeyOutcome::Quit,
         _ => {}
     }
     KeyOutcome::Continue
 }
 
+pub async fn handle_key<S>(app: &mut App, write: &mut S, key: KeyEvent) -> KeyOutcome
+where
+    S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    if key.kind != KeyEventKind::Press {
+        return KeyOutcome::Continue;
+    }
+
+    if key.code == KeyCode::Enter {
+        let input = std::mem::take(&mut app.input);
+        return handle_enter(app, write, input).await;
+    }
+
+    handle_local_key(app, key)
+}
+
 fn mark_disconnected(app: &mut App, reason: &str) {
     app.connected = false;
     app.stage = ClientStage::Disconnected;
-    app.push_message(reason.to_string());
+    app.push_event(ChatEvent::System(reason.to_string()));
 }
 
 async fn handle_enter<S>(app: &mut App, write: &mut S, input: String) -> KeyOutcome
@@ -88,19 +97,21 @@ where
                     mark_disconnected(app, "Failed to send response. Connection lost.");
                     return KeyOutcome::Disconnected;
                 }
-                app.push_message(
+                app.push_event(ChatEvent::System(
                     "Username not confirmed. Please enter a new username.".to_string(),
-                );
+                ));
                 app.stage = ClientStage::SetUsername;
             }
             _ => {
-                app.push_message("Invalid input. Please enter 'y' or 'n'.".to_string());
+                app.push_event(ChatEvent::Error(
+                    "Invalid input. Please enter 'y' or 'n'.".to_string(),
+                ));
             }
         },
         ClientStage::SelectRoom => {
             let room = input.trim().to_string();
             if room.is_empty() {
-                app.push_message("Room name cannot be empty.".to_string());
+                app.push_event(ChatEvent::Error("Room name cannot be empty.".to_string()));
                 return KeyOutcome::Continue;
             }
 
@@ -117,7 +128,7 @@ where
         ClientStage::Chatting { .. } => {
             let message = input.trim().to_string();
             if message.is_empty() {
-                app.push_message("Message cannot be empty.".to_string());
+                app.push_event(ChatEvent::Error("Message cannot be empty.".to_string()));
                 return KeyOutcome::Continue;
             }
             let msg = ClientMessage::ChatMessage { message };
@@ -129,7 +140,9 @@ where
             }
         }
         ClientStage::JoiningRoom { .. } => {
-            app.push_message("Still waiting to join the room...".to_string());
+            app.push_event(ChatEvent::System(
+                "Still waiting to join the room...".to_string(),
+            ));
         }
         ClientStage::Connecting | ClientStage::Disconnected => {}
     }

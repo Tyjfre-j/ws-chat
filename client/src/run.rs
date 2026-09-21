@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use ratatui::DefaultTerminal;
 use tokio_tungstenite::connect_async;
 
-use crate::app::App;
+use crate::app::{App, ChatEvent};
 use crate::events::{self, KeyOutcome};
 use crate::net;
 use crate::protocol::ClientStage;
@@ -28,7 +28,7 @@ pub async fn run_connection(
         Err(e) => {
             tracing::warn!(error = %e, server_url = %server_url, "failed to connect to server");
             app.connected = false;
-            app.push_message("Couldn't reach the server.".to_string());
+            app.push_event(ChatEvent::System("Couldn't reach the server.".to_string()));
             app.stage = ClientStage::Disconnected;
             return Ok(ConnectionOutcome::FailedToConnect);
         }
@@ -77,7 +77,7 @@ pub async fn run_connection(
     }
 
     app.connected = false;
-    app.push_message("Disconnected from server".to_string());
+    app.push_event(ChatEvent::System("Disconnected from server".to_string()));
     app.stage = ClientStage::Disconnected;
 
     Ok(ConnectionOutcome::Disconnected)
@@ -92,14 +92,20 @@ pub async fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Resu
             ConnectionOutcome::Quit => break,
             ConnectionOutcome::Disconnected => {
                 backoff = std::time::Duration::from_secs(1);
-                app.push_message(format!("Reconnecting in {}s...", backoff.as_secs()));
+                app.push_event(ChatEvent::System(format!(
+                    "Reconnecting in {}s...",
+                    backoff.as_secs()
+                )));
                 if wait_before_retry(terminal, app, &mut events_stream, backoff).await? {
                     return Ok(());
                 }
                 backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
             }
             ConnectionOutcome::FailedToConnect => {
-                app.push_message(format!("Retrying in {}s...", backoff.as_secs()));
+                app.push_event(ChatEvent::System(format!(
+                    "Retrying in {}s...",
+                    backoff.as_secs()
+                )));
                 if wait_before_retry(terminal, app, &mut events_stream, backoff).await? {
                     return Ok(());
                 }
@@ -117,20 +123,25 @@ async fn wait_before_retry(
     events_stream: &mut EventStream,
     backoff: std::time::Duration,
 ) -> std::io::Result<bool> {
-    terminal.draw(|frame| crate::ui::render(frame, app))?;
-
     let retry_timer = tokio::time::sleep(backoff);
     tokio::pin!(retry_timer);
 
     loop {
+        terminal.draw(|frame| crate::ui::render(frame, app))?;
         tokio::select! {
             _ = &mut retry_timer => return Ok(false),
             key_event = events_stream.next() => {
                 match key_event {
                     Some(Ok(crossterm::event::Event::Key(key)))
-                        if key.kind == crossterm::event::KeyEventKind::Press
-                            && key.code == crossterm::event::KeyCode::Esc => return Ok(true),
-                    Some(_) => {}
+                        if key.kind == crossterm::event::KeyEventKind::Press => {
+                        if key.code != crossterm::event::KeyCode::Enter {
+                            if let KeyOutcome::Quit = events::handle_local_key(app, key) {
+                                return Ok(true);
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => tracing::warn!(error = ?e, "error reading key event"),
                     None => return Ok(false),
                 }
             }
