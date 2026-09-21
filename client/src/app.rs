@@ -16,24 +16,23 @@ pub struct App {
     pub message_scroll: usize,
     pub connected: bool,
     pub stage: ClientStage,
+    pub total_messages_pushed: usize,
+    pub last_rendered_total_pushed: usize,
 }
 
 impl App {
     const MAX_MESSAGES: usize = 200;
 
     pub fn push_event(&mut self, event: ChatEvent) {
-        if self.message_scroll > 0 {
-            self.message_scroll += 1;
-        }
         self.messages.push(event);
+        self.total_messages_pushed += 1;
         if self.messages.len() > Self::MAX_MESSAGES {
             self.messages.remove(0);
-            self.message_scroll = self.message_scroll.saturating_sub(1);
         }
     }
 
     pub fn scroll_messages_up(&mut self) {
-        self.message_scroll = (self.message_scroll + 1).min(self.messages.len());
+        self.message_scroll = self.message_scroll.saturating_add(1);
     }
 
     pub fn scroll_messages_down(&mut self) {
