@@ -24,3 +24,9 @@ pub enum RunOutcome {
     Disconnected,
     InputFailed,
 }
+
+pub enum RetryOutcome {
+    Retry,
+    Quit,
+    InputFailed,
+}

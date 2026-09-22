@@ -6,8 +6,7 @@ use tokio_tungstenite::connect_async;
 use crate::app::{App, ChatEvent};
 use crate::events::{self, KeyOutcome};
 use crate::net;
-use crate::protocol::ClientStage;
-use crate::protocol::RunOutcome;
+use crate::protocol::{ClientStage, RetryOutcome, RunOutcome};
 
 const DEFAULT_SERVER_URL: &str = "ws://127.0.0.1:3000/ws";
 
@@ -68,7 +67,9 @@ pub async fn run_connection(
                     {
                         match events::handle_key(app, &mut write, key).await {
                             KeyOutcome::Quit => {
-                                let _ = write.close().await;
+                                if let Err(error) = write.close().await {
+                                    tracing::debug!(%error, "failed to close WebSocket cleanly");
+                                }
                                 return Ok(RunOutcome::Quit);
                             }
                             KeyOutcome::Disconnected => break,
@@ -80,11 +81,17 @@ pub async fn run_connection(
 
                     Some(Err(e)) => {
                         tracing::error!(error = ?e, "keyboard event stream failed");
+                        app.push_event(ChatEvent::System(
+                            "The client can no longer receive keyboard input.".to_string(),
+                        ));
                         return Ok(RunOutcome::InputFailed);
                     }
 
                     None => {
                         tracing::error!("keyboard event stream ended");
+                        app.push_event(ChatEvent::System(
+                            "The client can no longer receive keyboard input.".to_string(),
+                        ));
                         return Ok(RunOutcome::InputFailed);
                     }
                 }
@@ -121,9 +128,8 @@ pub async fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Resu
                 )));
 
                 match wait_before_retry(terminal, app, &mut events_stream, backoff).await? {
-                    RunOutcome::Quit | RunOutcome::InputFailed => break,
-                    RunOutcome::Disconnected => {}
-                    RunOutcome::ConnectionFailed => {}
+                    RetryOutcome::Quit | RetryOutcome::InputFailed => break,
+                    RetryOutcome::Retry => {}
                 }
 
                 backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
@@ -136,9 +142,8 @@ pub async fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Resu
                 )));
 
                 match wait_before_retry(terminal, app, &mut events_stream, backoff).await? {
-                    RunOutcome::Quit | RunOutcome::InputFailed => break,
-                    RunOutcome::Disconnected => {}
-                    RunOutcome::ConnectionFailed => {}
+                    RetryOutcome::Quit | RetryOutcome::InputFailed => break,
+                    RetryOutcome::Retry => {}
                 }
 
                 backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
@@ -154,7 +159,7 @@ async fn wait_before_retry(
     app: &mut App,
     events_stream: &mut EventStream,
     backoff: std::time::Duration,
-) -> std::io::Result<RunOutcome> {
+) -> std::io::Result<RetryOutcome> {
     let retry_timer = tokio::time::sleep(backoff);
     tokio::pin!(retry_timer);
 
@@ -162,7 +167,7 @@ async fn wait_before_retry(
         terminal.draw(|frame| crate::ui::render(frame, app))?;
 
         tokio::select! {
-            _ = &mut retry_timer => return Ok(RunOutcome::Disconnected),
+            _ = &mut retry_timer => return Ok(RetryOutcome::Retry),
 
             key_event = events_stream.next() => {
                 match key_event {
@@ -172,7 +177,7 @@ async fn wait_before_retry(
                         if key.code != crossterm::event::KeyCode::Enter
                             && let KeyOutcome::Quit = events::handle_local_key(app, key)
                         {
-                            return Ok(RunOutcome::Quit);
+                            return Ok(RetryOutcome::Quit);
                         }
                     }
 
@@ -180,12 +185,18 @@ async fn wait_before_retry(
 
                     Some(Err(e)) => {
                         tracing::error!(error = ?e, "keyboard event stream failed");
-                        return Ok(RunOutcome::InputFailed);
+                        app.push_event(ChatEvent::System(
+                            "The client can no longer receive keyboard input.".to_string(),
+                        ));
+                        return Ok(RetryOutcome::InputFailed);
                     }
 
                     None => {
                         tracing::error!("keyboard event stream ended");
-                        return Ok(RunOutcome::InputFailed);
+                        app.push_event(ChatEvent::System(
+                            "The client can no longer receive keyboard input.".to_string(),
+                        ));
+                        return Ok(RetryOutcome::InputFailed);
                     }
                 }
             }
