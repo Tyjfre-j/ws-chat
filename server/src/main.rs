@@ -1,5 +1,6 @@
 mod handlers;
 mod logging;
+mod net;
 mod protocol;
 mod state;
 
@@ -31,7 +32,12 @@ async fn main() -> std::io::Result<()> {
 
     let server_addr =
         std::env::var("WS_CHAT_SERVER_ADDR").unwrap_or_else(|_| DEFAULT_SERVER_ADDR.to_string());
-    let listener = tokio::net::TcpListener::bind(&server_addr).await?;
+
+    let listener = tokio::net::TcpListener::bind(&server_addr)
+        .await
+        .inspect_err(|e| {
+            tracing::error!(addr = %server_addr, error = %e, "failed to bind server address");
+        })?;
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = axum::serve(listener, app)
