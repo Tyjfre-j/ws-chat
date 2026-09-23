@@ -3,12 +3,18 @@ use futures_util::{SinkExt, StreamExt};
 use ratatui::DefaultTerminal;
 use tokio_tungstenite::connect_async;
 
-use crate::app::{App, ChatEvent};
+use crate::app::{App, ChatEvent, handle_server_message};
 use crate::events::{self, KeyOutcome};
 use crate::net;
-use crate::protocol::{ClientStage, RetryOutcome, RunOutcome};
+use crate::protocol::{ClientStage, Received, RetryOutcome, RunOutcome};
 
 const DEFAULT_SERVER_URL: &str = "ws://127.0.0.1:3000/ws";
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+pub enum ExitReason {
+    UserQuit,
+    InputFailed,
+}
 
 pub async fn run_connection(
     terminal: &mut DefaultTerminal,
@@ -23,12 +29,19 @@ pub async fn run_connection(
     let server_url =
         std::env::var("WS_CHAT_SERVER_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
 
-    let ws_stream = match connect_async(&server_url).await {
-        Ok((ws_stream, _response)) => ws_stream,
-        Err(e) => {
+    let ws_stream = match tokio::time::timeout(CONNECT_TIMEOUT, connect_async(&server_url)).await {
+        Ok(Ok((ws_stream, _response))) => ws_stream,
+        Ok(Err(e)) => {
             tracing::warn!(error = %e, server_url = %server_url, "failed to connect to server");
-            app.connected = false;
             app.push_event(ChatEvent::System("Couldn't reach the server.".to_string()));
+            app.stage = ClientStage::Disconnected;
+            return Ok(RunOutcome::ConnectionFailed);
+        }
+        Err(_) => {
+            tracing::warn!(server_url = %server_url, "connection attempt timed out");
+            app.push_event(ChatEvent::System(
+                "Connection attempt timed out.".to_string(),
+            ));
             app.stage = ClientStage::Disconnected;
             return Ok(RunOutcome::ConnectionFailed);
         }
@@ -41,22 +54,24 @@ pub async fn run_connection(
 
         tokio::select! {
             server_msg = read.next() => {
-                let server_msg = match server_msg {
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(payload))) => {
-                        if let Err(error) = write
-                            .send(tokio_tungstenite::tungstenite::Message::Pong(payload))
-                            .await
-                        {
-                            tracing::warn!(%error, "failed to respond to server ping");
-                            break;
-                        }
-                        continue;
+                match net::receive_server_message(server_msg) {
+                    Received::Message(msg) => {
+                        handle_server_message(app, msg);
                     }
-                    message => message,
-                };
-
-                if !net::handle_incoming(app, server_msg) {
-                    break;
+                    Received::Ignored => {}
+                    Received::Unsupported | Received::Invalid => {
+                        app.push_event(ChatEvent::System(
+                            "Received an unexpected message from the server. Connection lost."
+                                .to_string(),
+                        ));
+                        break;
+                    }
+                    Received::Disconnected => {
+                        app.push_event(ChatEvent::System(
+                            "Server closed the connection.".to_string(),
+                        ));
+                        break;
+                    }
                 }
             }
 
@@ -100,35 +115,35 @@ pub async fn run_connection(
     }
 
     app.connected = false;
-    app.push_event(ChatEvent::System("Disconnected from server".to_string()));
     app.stage = ClientStage::Disconnected;
 
     Ok(RunOutcome::Disconnected)
 }
 
-pub async fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
+pub async fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<ExitReason> {
     let mut events_stream = EventStream::new();
     let mut backoff = std::time::Duration::from_secs(1);
 
     loop {
         match run_connection(terminal, app, &mut events_stream).await? {
-            RunOutcome::Quit => break,
+            RunOutcome::Quit => return Ok(ExitReason::UserQuit),
 
             RunOutcome::InputFailed => {
                 tracing::error!("client input system failed");
-                break;
+                return Ok(ExitReason::InputFailed);
             }
 
             RunOutcome::Disconnected => {
                 backoff = std::time::Duration::from_secs(1);
 
                 app.push_event(ChatEvent::System(format!(
-                    "Reconnecting in {}s...",
+                    "Retrying in {}s...",
                     backoff.as_secs()
                 )));
 
                 match wait_before_retry(terminal, app, &mut events_stream, backoff).await? {
-                    RetryOutcome::Quit | RetryOutcome::InputFailed => break,
+                    RetryOutcome::Quit => return Ok(ExitReason::UserQuit),
+                    RetryOutcome::InputFailed => return Ok(ExitReason::InputFailed),
                     RetryOutcome::Retry => {}
                 }
 
@@ -142,7 +157,8 @@ pub async fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Resu
                 )));
 
                 match wait_before_retry(terminal, app, &mut events_stream, backoff).await? {
-                    RetryOutcome::Quit | RetryOutcome::InputFailed => break,
+                    RetryOutcome::Quit => return Ok(ExitReason::UserQuit),
+                    RetryOutcome::InputFailed => return Ok(ExitReason::InputFailed),
                     RetryOutcome::Retry => {}
                 }
 
@@ -150,8 +166,6 @@ pub async fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Resu
             }
         }
     }
-
-    Ok(())
 }
 
 async fn wait_before_retry(
@@ -174,9 +188,7 @@ async fn wait_before_retry(
                     Some(Ok(crossterm::event::Event::Key(key)))
                         if key.kind == crossterm::event::KeyEventKind::Press =>
                     {
-                        if key.code != crossterm::event::KeyCode::Enter
-                            && let KeyOutcome::Quit = events::handle_local_key(app, key)
-                        {
+                        if let KeyOutcome::Quit = events::handle_retry_wait_key(app, key) {
                             return Ok(RetryOutcome::Quit);
                         }
                     }
