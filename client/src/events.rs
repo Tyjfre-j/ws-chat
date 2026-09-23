@@ -4,7 +4,10 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::app::{App, ChatEvent};
 use crate::net;
-use crate::protocol::{ClientMessage, ClientStage};
+use crate::protocol::{
+    ClientMessage, ClientStage, MAX_CHAT_MESSAGE_LEN, MAX_ROOM_NAME_LEN, MAX_USERNAME_LEN,
+    has_control_characters,
+};
 
 pub enum KeyOutcome {
     Quit,
@@ -20,8 +23,8 @@ pub fn handle_local_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     }
 
     match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            return KeyOutcome::Quit;
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.cycle_theme();
         }
         KeyCode::Char(c)
             if !key
@@ -71,10 +74,27 @@ where
 {
     match &app.stage {
         ClientStage::SetUsername => {
-            let msg = ClientMessage::SetUsername {
-                username: input.clone(),
-            };
-            if !net::send_msg(write, &msg).await {
+            let username = input.trim().to_string();
+
+            if username.is_empty() {
+                app.push_event(ChatEvent::Error("Username cannot be empty.".to_string()));
+                return KeyOutcome::Continue;
+            }
+
+            if username.chars().count() > MAX_USERNAME_LEN {
+                app.push_event(ChatEvent::Error("Username is too long.".to_string()));
+                return KeyOutcome::Continue;
+            }
+
+            if has_control_characters(&username) {
+                app.push_event(ChatEvent::Error(
+                    "Username cannot contain control characters.".to_string(),
+                ));
+                return KeyOutcome::Continue;
+            }
+
+            let msg = ClientMessage::SetUsername { username };
+            if !net::send_client_message(write, &msg).await {
                 tracing::warn!("failed to send username; connection likely dead");
                 app.input = input;
                 mark_disconnected(app, "Failed to send username. Connection lost.");
@@ -83,16 +103,16 @@ where
         }
         ClientStage::ConfirmUsername { .. } => match input.trim().to_lowercase().as_str() {
             "y" => {
-                let msg = ClientMessage::ConfirmUsername { confirmed: true };
-                if !net::send_msg(write, &msg).await {
+                let msg = ClientMessage::AcceptUsername { accepted: true };
+                if !net::send_client_message(write, &msg).await {
                     tracing::warn!("failed to send username confirmation; connection likely dead");
                     mark_disconnected(app, "Failed to confirm username. Connection lost.");
                     return KeyOutcome::Disconnected;
                 }
             }
             "n" => {
-                let msg = ClientMessage::ConfirmUsername { confirmed: false };
-                if !net::send_msg(write, &msg).await {
+                let msg = ClientMessage::AcceptUsername { accepted: false };
+                if !net::send_client_message(write, &msg).await {
                     tracing::warn!("failed to send username rejection; connection likely dead");
                     mark_disconnected(app, "Failed to send response. Connection lost.");
                     return KeyOutcome::Disconnected;
@@ -110,13 +130,26 @@ where
         },
         ClientStage::SelectRoom => {
             let room = input.trim().to_string();
+
             if room.is_empty() {
                 app.push_event(ChatEvent::Error("Room name cannot be empty.".to_string()));
                 return KeyOutcome::Continue;
             }
 
+            if room.chars().count() > MAX_ROOM_NAME_LEN {
+                app.push_event(ChatEvent::Error("Room name is too long.".to_string()));
+                return KeyOutcome::Continue;
+            }
+
+            if has_control_characters(&room) {
+                app.push_event(ChatEvent::Error(
+                    "Room name cannot contain control characters.".to_string(),
+                ));
+                return KeyOutcome::Continue;
+            }
+
             let msg = ClientMessage::JoinRoom { room: room.clone() };
-            if !net::send_msg(write, &msg).await {
+            if !net::send_client_message(write, &msg).await {
                 tracing::warn!("failed to send join room request; connection likely dead");
                 app.input = input;
                 mark_disconnected(app, "Failed to join room. Connection lost.");
@@ -127,12 +160,26 @@ where
         }
         ClientStage::Chatting { .. } => {
             let message = input.trim().to_string();
+
             if message.is_empty() {
                 app.push_event(ChatEvent::Error("Message cannot be empty.".to_string()));
                 return KeyOutcome::Continue;
             }
+
+            if message.len() > MAX_CHAT_MESSAGE_LEN {
+                app.push_event(ChatEvent::Error("Message is too large.".to_string()));
+                return KeyOutcome::Continue;
+            }
+
+            if has_control_characters(&message) {
+                app.push_event(ChatEvent::Error(
+                    "Message cannot contain control characters.".to_string(),
+                ));
+                return KeyOutcome::Continue;
+            }
+
             let msg = ClientMessage::ChatMessage { message };
-            if !net::send_msg(write, &msg).await {
+            if !net::send_client_message(write, &msg).await {
                 tracing::warn!("failed to send chat message; connection likely dead");
                 app.input = input;
                 mark_disconnected(app, "Failed to send message. Connection lost.");
@@ -148,4 +195,23 @@ where
     }
 
     KeyOutcome::Continue
+}
+
+pub fn handle_retry_wait_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    if key.kind != KeyEventKind::Press {
+        return KeyOutcome::Continue;
+    }
+
+    match key.code {
+        KeyCode::Esc => KeyOutcome::Quit,
+        KeyCode::Up => {
+            app.scroll_messages_up();
+            KeyOutcome::Continue
+        }
+        KeyCode::Down => {
+            app.scroll_messages_down();
+            KeyOutcome::Continue
+        }
+        _ => KeyOutcome::Continue,
+    }
 }
