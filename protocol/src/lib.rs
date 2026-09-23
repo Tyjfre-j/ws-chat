@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", content = "data")]
 pub enum ClientMessage {
     SetUsername { username: String },
-    ConfirmUsername { confirmed: bool },
+    AcceptUsername { accepted: bool },
     JoinRoom { room: String },
     ChatMessage { message: String },
 }
@@ -13,16 +13,16 @@ pub enum ClientMessage {
 #[serde(tag = "type", content = "data")]
 pub enum ServerMessage {
     Welcome,
-    ConfirmUsername { username: String },
+    ProposedUsername { username: String },
     RoomList { rooms: Vec<String> },
-    RoomJoined { room: String },
+    RoomJoinConfirmed { room: String },
     ChatMessage { username: String, message: String },
-    JoinedRoom { username: String },
-    LeftRoom { username: String },
+    UserJoined { username: String },
+    UserLeft { username: String },
     Error { code: ErrorCode, message: String },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     InvalidMessage,
@@ -36,4 +36,21 @@ pub enum ErrorCode {
     UnsupportedMessage,
     MessageTooLarge,
     LaggedBehind,
+}
+
+#[derive(Debug)]
+pub enum Received<T> {
+    Message(T),
+    Ignored,
+    Unsupported,
+    Invalid,
+    Disconnected,
+}
+
+pub const MAX_USERNAME_LEN: usize = 64;
+pub const MAX_ROOM_NAME_LEN: usize = 64;
+pub const MAX_CHAT_MESSAGE_LEN: usize = 4 * 1024;
+
+pub fn has_control_characters(value: &str) -> bool {
+    value.chars().any(char::is_control)
 }
