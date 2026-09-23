@@ -4,6 +4,7 @@ mod logging;
 mod net;
 mod protocol;
 mod run;
+mod theme;
 mod ui;
 
 fn main() -> color_eyre::Result<()> {
@@ -23,5 +24,9 @@ fn main() -> color_eyre::Result<()> {
     let result = runtime.block_on(run::run(&mut terminal, &mut app));
     ratatui::restore();
 
-    result.map_err(Into::into)
+    if let Ok(run::ExitReason::InputFailed) = &result {
+        eprintln!("The client stopped because it could no longer read keyboard input.");
+    }
+
+    result.map(|_| ()).map_err(Into::into)
 }
