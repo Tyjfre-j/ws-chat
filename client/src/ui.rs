@@ -1,46 +1,31 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    layout::{Alignment, Constraint, Direction, Layout},
+    style::Style,
+    text::{Line, Span},
+    widgets::{Block, Padding, Paragraph, Wrap},
 };
 
 use crate::app::{App, ChatEvent};
 use crate::protocol::ClientStage;
-use ratatui::style::{Color, Style};
-use ratatui::widgets::{BorderType, Padding};
-use std::sync::OnceLock;
+use crate::theme::theme_for;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const SINGLE_LINE_CONTENT: u16 = 1;
-const BOX_BORDER: u16 = 1;
-const SINGLE_LINE_BOX_HEIGHT: u16 = SINGLE_LINE_CONTENT + 2 * BOX_BORDER;
-const SINGLE_LINE_PADDING: Padding = Padding::new(1, 1, 0, 0);
-const MESSAGES_PADDING: Padding = Padding::uniform(1);
-const FOOTER_HEIGHT: u16 = 1;
-
-const BADGE_TEXTS: [&str; 3] = ["● Connected", "● Disconnected", "● Connecting"];
-
-fn badge_width() -> u16 {
-    static WIDTH: OnceLock<u16> = OnceLock::new();
-    *WIDTH.get_or_init(|| {
-        let max_text_width = BADGE_TEXTS
-            .iter()
-            .map(|s| s.width() as u16)
-            .max()
-            .unwrap_or(0);
-        max_text_width + 2 * BOX_BORDER + SINGLE_LINE_PADDING.left + SINGLE_LINE_PADDING.right
-    })
-}
-
-const MIN_TERMINAL_WIDTH: u16 = 40;
-
+const STATUS_HEIGHT: u16 = 1;
+const RULE_HEIGHT: u16 = 1;
+const INPUT_HEIGHT: u16 = 1;
+const HINTS_HEIGHT: u16 = 1;
 const MIN_MESSAGE_ROWS: u16 = 3;
-const MESSAGES_CHROME: u16 = 2 * BOX_BORDER + 2;
-const MIN_TERMINAL_HEIGHT: u16 = SINGLE_LINE_BOX_HEIGHT
-    + MESSAGES_CHROME
+const MIN_TERMINAL_HEIGHT: u16 = STATUS_HEIGHT
+    + RULE_HEIGHT
     + MIN_MESSAGE_ROWS
-    + SINGLE_LINE_BOX_HEIGHT
-    + FOOTER_HEIGHT;
+    + RULE_HEIGHT
+    + INPUT_HEIGHT
+    + RULE_HEIGHT
+    + HINTS_HEIGHT;
+
+const MESSAGES_MARGIN: Padding = Padding::new(2, 2, 0, 0);
+const HINTS: &str = "Esc quit · ↑↓ scroll · Enter send · Ctrl+T theme";
 
 fn trailing_input(input: &str, max_width: usize) -> &str {
     let mut width = 0;
@@ -48,9 +33,11 @@ fn trailing_input(input: &str, max_width: usize) -> &str {
 
     for (index, character) in input.char_indices().rev() {
         let character_width = character.width().unwrap_or(0);
+
         if width + character_width > max_width {
             break;
         }
+
         width += character_width;
         start = index;
     }
@@ -62,7 +49,7 @@ fn event_text(event: &ChatEvent) -> String {
     match event {
         ChatEvent::System(text) => text.clone(),
         ChatEvent::Prompt(text) => text.clone(),
-        ChatEvent::Chat { username, text } => format!("[{username}]: {text}"),
+        ChatEvent::Chat { username, text } => format!("{username}  {text}"),
         ChatEvent::Joined { username } => format!("{username} joined the room"),
         ChatEvent::Left { username } => format!("{username} left the room"),
         ChatEvent::Error(text) => text.clone(),
@@ -76,32 +63,122 @@ fn wrapped_line_count(text: &str, width: u16) -> usize {
 }
 
 pub fn render(frame: &mut Frame, app: &mut App) {
+    let theme = theme_for(app.theme);
+
     let area = frame.area();
-    if area.width < MIN_TERMINAL_WIDTH || area.height < MIN_TERMINAL_HEIGHT {
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme.background)),
+        area,
+    );
+
+    let min_terminal_width = HINTS
+        .width()
+        .max((MESSAGES_MARGIN.left + MESSAGES_MARGIN.right + 1) as usize)
+        as u16;
+
+    if area.width < min_terminal_width || area.height < MIN_TERMINAL_HEIGHT {
         let message = format!(
             "Terminal too small ({}x{}).\nResize to at least {}x{}.",
-            area.width, area.height, MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT
+            area.width, area.height, min_terminal_width, MIN_TERMINAL_HEIGHT
         );
+
         frame.render_widget(
             Paragraph::new(message)
-                .alignment(ratatui::layout::Alignment::Center)
+                .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true }),
             area,
         );
+
         return;
     }
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(SINGLE_LINE_BOX_HEIGHT),
+            Constraint::Length(STATUS_HEIGHT),
+            Constraint::Length(RULE_HEIGHT),
             Constraint::Min(1),
-            Constraint::Length(SINGLE_LINE_BOX_HEIGHT),
-            Constraint::Length(FOOTER_HEIGHT),
+            Constraint::Length(RULE_HEIGHT),
+            Constraint::Length(INPUT_HEIGHT),
+            Constraint::Length(RULE_HEIGHT),
+            Constraint::Length(HINTS_HEIGHT),
         ])
-        .split(frame.area());
+        .split(area);
 
-    let status = match &app.stage {
+    let status_area = chunks[0];
+    let rule_area_1 = chunks[1];
+    let messages_area = chunks[2];
+    let rule_area_2 = chunks[3];
+    let input_area = chunks[4];
+    let rule_area_3 = chunks[5];
+    let hints_area = chunks[6];
+
+    let messages_block = Block::default().padding(MESSAGES_MARGIN);
+    let messages_inner = messages_block.inner(messages_area);
+    let visible_height = messages_inner.height as usize;
+    let messages_width = messages_inner.width;
+
+    let was_at_top = app.max_message_scroll > 0 && app.message_scroll >= app.max_message_scroll;
+
+    let new_push_count = app
+        .total_messages_pushed
+        .saturating_sub(app.cached_generation)
+        .min(app.messages.len());
+
+    let cache_stale =
+        app.cached_generation != app.total_messages_pushed || app.cached_width != messages_width;
+
+    if cache_stale {
+        app.cached_full_text = app
+            .messages
+            .iter()
+            .map(event_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        app.cached_content_lines = wrapped_line_count(&app.cached_full_text, messages_width);
+        app.cached_width = messages_width;
+    }
+
+    let content_lines = app.cached_content_lines;
+
+    let leading_padding = visible_height.saturating_sub(content_lines);
+    let total_lines = content_lines + leading_padding;
+
+    if cache_stale || app.cached_leading_padding != leading_padding {
+        app.cached_padded_text = if leading_padding > 0 {
+            format!("{}{}", "\n".repeat(leading_padding), app.cached_full_text)
+        } else {
+            app.cached_full_text.clone()
+        };
+        app.cached_leading_padding = leading_padding;
+    }
+
+    let max_scroll = total_lines.saturating_sub(visible_height);
+
+    if new_push_count > 0 && app.message_scroll > 0 {
+        let new_messages = &app.messages[app.messages.len() - new_push_count..];
+
+        let new_lines: usize = new_messages
+            .iter()
+            .map(|event| wrapped_line_count(&event_text(event), messages_width))
+            .sum();
+
+        app.message_scroll = app.message_scroll.saturating_add(new_lines).min(max_scroll);
+    }
+
+    if was_at_top {
+        app.message_scroll = max_scroll;
+    }
+
+    app.max_message_scroll = max_scroll;
+    app.message_scroll = app.message_scroll.min(max_scroll);
+    app.cached_generation = app.total_messages_pushed;
+
+    let scroll_offset = (max_scroll - app.message_scroll).min(u16::MAX as usize) as u16;
+
+    let stage_text = match &app.stage {
         ClientStage::Connecting => "Connecting".to_string(),
         ClientStage::SetUsername => "Entering Username".to_string(),
         ClientStage::ConfirmUsername { confirmed_username } => {
@@ -113,129 +190,76 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ClientStage::Disconnected => "Disconnected".to_string(),
     };
 
-    let border_color = match &app.stage {
-        ClientStage::Connecting => Color::Yellow,
-        ClientStage::Disconnected => Color::Red,
-        ClientStage::Chatting { .. } => Color::Green,
-        _ => Color::White,
-    };
-
-    let (badge_text, badge_color) = if app.connected {
-        ("● Connected", Color::Green)
+    let (state_label, state_color) = if app.connected {
+        ("Connected", theme.connected)
     } else if matches!(app.stage, ClientStage::Disconnected) {
-        ("● Disconnected", Color::Red)
+        ("Disconnected", theme.disconnected)
     } else {
-        ("● Connecting", Color::Yellow)
+        ("Connecting", theme.connecting)
     };
 
-    let header_title = match &app.stage {
-        ClientStage::Chatting { room } => format!("ws-chat — {room}"),
-        _ => "ws-chat".to_string(),
-    };
-
-    let header_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(badge_width())])
-        .split(chunks[0]);
-
-    frame.render_widget(
-        Paragraph::new(status).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(header_title)
-                .border_style(Style::default().fg(border_color))
-                .border_type(BorderType::Rounded)
-                .padding(SINGLE_LINE_PADDING),
+    let status_line = Line::from(vec![
+        Span::styled("●", Style::default().fg(state_color)),
+        Span::styled(
+            format!(" {state_label} · {stage_text}"),
+            Style::default().fg(theme.text),
         ),
-        header_chunks[0],
-    );
+    ]);
 
-    frame.render_widget(
-        Paragraph::new(badge_text)
-            .style(Style::default().fg(badge_color))
-            .alignment(ratatui::layout::Alignment::Right)
-            .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color))
-                    .border_type(BorderType::Rounded)
-                    .padding(SINGLE_LINE_PADDING),
-            ),
-        header_chunks[1],
-    );
-
-    let messages_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .padding(MESSAGES_PADDING);
-
-    let messages_inner = messages_block.inner(chunks[1]);
-    let visible_height = messages_inner.height as usize;
-    let messages_width = messages_inner.width;
-
-    let new_push_count = app
-        .total_messages_pushed
-        .saturating_sub(app.last_rendered_total_pushed)
-        .min(app.messages.len());
-    if new_push_count > 0 {
-        if app.message_scroll > 0 {
-            let new_messages = &app.messages[app.messages.len() - new_push_count..];
-            let new_lines: usize = new_messages
-                .iter()
-                .map(|event| wrapped_line_count(&event_text(event), messages_width))
-                .sum();
-            app.message_scroll += new_lines;
-        }
-        app.last_rendered_total_pushed = app.total_messages_pushed;
-    }
-
-    let full_text = app
-        .messages
-        .iter()
-        .map(event_text)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let content_lines = wrapped_line_count(&full_text, messages_width);
-
-    let leading_padding = visible_height.saturating_sub(content_lines);
-    let total_lines = content_lines + leading_padding;
-    let padded_text = if leading_padding > 0 {
-        format!("{}{}", "\n".repeat(leading_padding), full_text)
+    let scroll_hint = if app.message_scroll > 0 {
+        format!("{} newer ↑↓", app.message_scroll)
     } else {
-        full_text
+        String::new()
     };
 
-    let max_scroll = total_lines.saturating_sub(visible_height);
-    app.message_scroll = app.message_scroll.min(max_scroll);
-    let scroll_offset = (max_scroll - app.message_scroll) as u16;
+    let scroll_hint_width = scroll_hint.width() as u16;
 
-    let messages_title = if app.message_scroll == 0 {
-        "Messages".to_string()
-    } else {
-        format!("Messages ({} newer; ↑/↓ to scroll)", app.message_scroll)
-    };
-    let messages_block = messages_block.title(messages_title);
+    let status_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(scroll_hint_width)])
+        .split(status_area);
+
+    frame.render_widget(Paragraph::new(status_line), status_chunks[0]);
 
     frame.render_widget(
-        Paragraph::new(padded_text)
+        Paragraph::new(scroll_hint)
+            .style(Style::default().fg(theme.dim))
+            .alignment(Alignment::Right),
+        status_chunks[1],
+    );
+
+    let rule = "─".repeat(area.width as usize);
+    let rule_style = Style::default().fg(theme.rule);
+
+    frame.render_widget(Paragraph::new(rule.as_str()).style(rule_style), rule_area_1);
+
+    frame.render_widget(Paragraph::new(rule.as_str()).style(rule_style), rule_area_2);
+
+    frame.render_widget(Paragraph::new(rule).style(rule_style), rule_area_3);
+
+    frame.render_widget(
+        Paragraph::new(app.cached_padded_text.as_str())
+            .style(Style::default().fg(theme.text))
             .block(messages_block)
             .wrap(Wrap { trim: false })
             .scroll((scroll_offset, 0)),
-        chunks[1],
+        messages_area,
     );
 
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .title("Input")
-        .border_type(BorderType::Rounded)
-        .padding(SINGLE_LINE_PADDING);
+    let prefix = "› ";
+    let prefix_width = prefix.width();
+    let input_width = input_area.width as usize;
 
-    let input_inner = input_block.inner(chunks[2]);
-    let input_width = input_inner.width as usize;
-    let visible_input = trailing_input(&app.input, input_width.saturating_sub(1));
+    let available_width = input_width.saturating_sub(prefix_width).saturating_sub(1);
 
-    frame.render_widget(Paragraph::new(visible_input).block(input_block), chunks[2]);
+    let visible_input = trailing_input(&app.input, available_width);
+
+    let input_line = Line::from(vec![
+        Span::styled(prefix, Style::default().fg(state_color)),
+        Span::styled(visible_input, Style::default().fg(theme.text)),
+    ]);
+
+    frame.render_widget(Paragraph::new(input_line), input_area);
 
     if matches!(
         app.stage,
@@ -244,11 +268,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             | ClientStage::SelectRoom
             | ClientStage::Chatting { .. }
     ) {
-        let cursor_x = input_inner.x.saturating_add(visible_input.width() as u16);
-        frame.set_cursor_position((cursor_x, input_inner.y));
+        let cursor_x = input_area
+            .x
+            .saturating_add(prefix_width as u16)
+            .saturating_add(visible_input.width() as u16);
+
+        frame.set_cursor_position((cursor_x, input_area.y));
     }
 
-    let footer = Paragraph::new("Esc quit · ↑↓ scroll · Enter send")
-        .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(footer, chunks[3]);
+    frame.render_widget(
+        Paragraph::new(HINTS)
+            .style(Style::default().fg(theme.dim))
+            .alignment(Alignment::Center),
+        hints_area,
+    );
 }
